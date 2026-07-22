@@ -1,16 +1,15 @@
 package dataset
 
 import (
-	"compress/flate"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
+	"github.com/klauspost/compress/zstd"
 	_ "modernc.org/sqlite"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -312,10 +311,19 @@ func ftsQuery(q, conjunction string) string {
 	return strings.Join(quoted, conjunction)
 }
 
+// One decoder serves every read. zstd's decoder is safe for concurrent use
+// and reuses its buffers, which matters when each request decompresses a
+// payload.
+var decoder = func() *zstd.Decoder {
+	d, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
+	if err != nil {
+		panic("dataset: " + err.Error())
+	}
+	return d
+}()
+
 func decode(blob []byte, into any) error {
-	zr := flate.NewReader(strings.NewReader(string(blob)))
-	defer zr.Close()
-	raw, err := io.ReadAll(zr)
+	raw, err := decoder.DecodeAll(blob, nil)
 	if err != nil {
 		return fmt.Errorf("dataset: decompressing payload: %w", err)
 	}

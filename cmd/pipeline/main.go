@@ -286,6 +286,9 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 	if err != nil {
 		return err
 	}
+	// Marshalling and compressing dominate a build and parallelise cleanly;
+	// only the SQLite writes have to stay serial.
+	par := dataset.NewParallel(writer, 0)
 
 	start := time.Now()
 	artistsWritten, albumsWritten := 0, 0
@@ -303,15 +306,19 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 		Artist: func(a *skyhook.ArtistResource) error {
 			artistsWritten++
 			progress("artists", artistsWritten)
-			return writer.AddArtist(a)
+			return par.AddArtist(a)
 		},
 		Album: func(a *skyhook.AlbumResource) error {
 			albumsWritten++
 			progress("albums", albumsWritten)
-			return writer.AddAlbum(a)
+			return par.AddAlbum(a)
 		},
 	})
 	if err != nil {
+		par.Close()
+		return err
+	}
+	if err := par.Close(); err != nil {
 		return err
 	}
 

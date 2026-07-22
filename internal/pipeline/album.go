@@ -58,7 +58,7 @@ func (c *collector) albumHandlers() map[string]mbdump.RowFunc {
 		"label":                   c.readLabel,
 		"release_country":         c.readReleaseCountry,
 		"release_unknown_country": c.readReleaseDate,
-		"iso_3166_1":              c.readISO,
+		"area":                    c.readArea,
 	}
 }
 
@@ -197,15 +197,18 @@ func (c *collector) readLabel(row []mbdump.Field) error {
 	return nil
 }
 
-func (c *collector) readISO(row []mbdump.Field) error {
-	if err := mbdump.CheckColumns("iso_3166_1", row, mbdump.ISOColumns); err != nil {
+// readArea keeps the country names releases are labelled with. Upstream emits
+// "United States" where the ISO table would give "US", and the fixtures are
+// the authority on which the contract wants.
+func (c *collector) readArea(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("area", row, mbdump.AreaColumns); err != nil {
 		return err
 	}
-	area, err := atoi(row[mbdump.ISOArea])
+	id, err := atoi(row[mbdump.AreaID])
 	if err != nil {
 		return err
 	}
-	c.countryCodes[area] = row[mbdump.ISOCode].Value
+	c.countryCodes[id] = row[mbdump.AreaName].Value
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -420,5 +421,73 @@ func TestSearchAlbumsNarrowsByArtist(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("unknown artist returned %d results, want none", len(none))
+	}
+}
+
+// The parallel writer must produce exactly what the serial one does, since it
+// is the only thing that writes a shipped dataset.
+func TestParallelWriterMatchesSerial(t *testing.T) {
+	build := func(parallel bool) map[string]string {
+		path := filepath.Join(t.TempDir(), "d.db")
+		w, err := Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artists := []*skyhook.ArtistResource{}
+		for i := 0; i < 200; i++ {
+			a := sampleArtist()
+			a.ID = fmt.Sprintf("%08d-0000-0000-0000-000000000000", i)
+			a.ArtistName = fmt.Sprintf("Artist %d", i)
+			a.OldIDs = []string{}
+			artists = append(artists, a)
+		}
+
+		if parallel {
+			p := NewParallel(w, 4)
+			for _, a := range artists {
+				if err := p.AddArtist(a); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := p.Close(); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			for _, a := range artists {
+				if err := w.AddArtist(a); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := w.Finish("stamp", 1); err != nil {
+			t.Fatal(err)
+		}
+
+		r, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+
+		out := map[string]string{}
+		for _, a := range artists {
+			got, err := r.Artist(context.Background(), a.ID)
+			if err != nil {
+				t.Fatalf("%s: %v", a.ID, err)
+			}
+			raw, _ := json.Marshal(got)
+			out[a.ID] = string(raw)
+		}
+		return out
+	}
+
+	serial, parallel := build(false), build(true)
+	if len(serial) != len(parallel) {
+		t.Fatalf("serial wrote %d, parallel wrote %d", len(serial), len(parallel))
+	}
+	for id, want := range serial {
+		if parallel[id] != want {
+			t.Fatalf("payload for %s differs between serial and parallel writes", id)
+		}
 	}
 }

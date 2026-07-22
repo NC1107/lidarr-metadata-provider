@@ -73,9 +73,9 @@ func albumTables() map[string]string {
 			mbdump.ReleaseCountryYear: "1991", mbdump.ReleaseCountryMonth: "3",
 			mbdump.ReleaseCountryDay: "5"}),
 	}, "\n")
-	t["iso_3166_1"] = strings.Join([]string{
-		row(mbdump.ISOColumns, map[int]string{mbdump.ISOArea: "221", mbdump.ISOCode: "GB"}),
-		row(mbdump.ISOColumns, map[int]string{mbdump.ISOArea: "222", mbdump.ISOCode: "US"}),
+	t["area"] = strings.Join([]string{
+		row(mbdump.AreaColumns, map[int]string{mbdump.AreaID: "221", mbdump.AreaName: "United Kingdom"}),
+		row(mbdump.AreaColumns, map[int]string{mbdump.AreaID: "222", mbdump.AreaName: "United States"}),
 	}, "\n")
 
 	// A release with no country still carries a date, recorded separately.
@@ -87,7 +87,7 @@ func albumTables() map[string]string {
 }
 
 var albumCoreTables = append(append([]string{}, coreTables...),
-	"iso_3166_1", "label", "medium", "medium_format", "recording",
+	"area", "label", "medium", "medium_format", "recording",
 	"release_country", "release_label", "release_unknown_country", "track")
 
 func buildAlbums(t *testing.T) map[string]*skyhook.AlbumResource {

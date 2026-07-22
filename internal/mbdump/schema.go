@@ -129,10 +129,12 @@ const (
 	ReleaseUnknownCountryMonth   = 2
 	ReleaseUnknownCountryDay     = 3
 
-	// iso_3166_1 turns an area id into the country code the contract emits.
-	ISOColumns = 2
-	ISOArea    = 0
-	ISOCode    = 1
+	// area names the country a release came out in. Upstream emits the name
+	// ("United States") rather than the ISO code ("US"), so the code table is
+	// not what the contract wants.
+	AreaColumns = 14
+	AreaID      = 0
+	AreaName    = 2
 
 	ReleaseLabelColumns = 5
 	ReleaseLabelRelease = 1
