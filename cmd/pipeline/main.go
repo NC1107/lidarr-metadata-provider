@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +22,29 @@ import (
 )
 
 func main() {
+	// A build holds several gigabytes of join tables, and Go's collector will
+	// happily let the heap grow to twice that before running. On a machine
+	// sized for the job rather than for the garbage, that headroom is the
+	// difference between fitting and being killed, so cap it. The limit is
+	// soft: exceeding it makes collection more aggressive rather than
+	// failing an allocation.
+	if limit := os.Getenv("LMP_MEMORY_LIMIT_GB"); limit != "" {
+		if gb, err := strconv.Atoi(limit); err == nil && gb > 0 {
+			debug.SetMemoryLimit(int64(gb) << 30)
+		}
+	} else {
+		debug.SetMemoryLimit(defaultMemoryLimit)
+	}
+
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "pipeline:", err)
 		os.Exit(1)
 	}
 }
+
+// defaultMemoryLimit keeps a build inside what a standard CI runner has,
+// since that is where these are produced. Override with LMP_MEMORY_LIMIT_GB.
+const defaultMemoryLimit = 10 << 30
 
 func run(args []string) error {
 	if len(args) < 2 {
