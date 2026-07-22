@@ -40,15 +40,38 @@ import (
 // The core archive must be read before the derived one, which only fills in
 // entities the first pass established.
 func BuildArtists(core, derived *mbdump.Archive, mbids []string) (map[string]*skyhook.ArtistResource, error) {
-	if err := sameExport(core, derived); err != nil {
-		return nil, err
-	}
-
 	want := make(map[string]bool, len(mbids))
 	for _, id := range mbids {
 		want[strings.ToLower(strings.TrimSpace(id))] = true
 	}
 
+	c, err := scan(core, derived, want)
+	if err != nil {
+		return nil, err
+	}
+	return c.assemble()
+}
+
+// BuildAllArtists streams every artist in the export to emit.
+//
+// Emitting through a callback rather than returning a map matters at this
+// scale: the export holds millions of artists, and materialising every
+// finished payload before writing any of them would roughly double the peak
+// memory of an already heavy build.
+func BuildAllArtists(core, derived *mbdump.Archive, emit func(*skyhook.ArtistResource) error) error {
+	c, err := scan(core, derived, nil)
+	if err != nil {
+		return err
+	}
+	return c.emitAll(emit)
+}
+
+// scan reads both archives into a collector. want limits which artists are
+// kept; nil keeps all of them.
+func scan(core, derived *mbdump.Archive, want map[string]bool) (*collector, error) {
+	if err := sameExport(core, derived); err != nil {
+		return nil, err
+	}
 	c := newCollector(want)
 	if err := core.ReadTables(c.coreHandlers()); err != nil {
 		return nil, err
@@ -56,7 +79,7 @@ func BuildArtists(core, derived *mbdump.Archive, mbids []string) (map[string]*sk
 	if err := derived.ReadTables(c.derivedHandlers()); err != nil {
 		return nil, err
 	}
-	return c.assemble()
+	return c, nil
 }
 
 // sameExport rejects archives from different exports. Mixing them would join
@@ -211,7 +234,7 @@ func (c *collector) readArtist(row []mbdump.Field) error {
 		return err
 	}
 	gid := row[mbdump.ArtistGID].Value
-	if !c.want[gid] {
+	if c.want != nil && !c.want[gid] {
 		return nil
 	}
 	id, err := atoi(row[mbdump.ArtistID])
@@ -418,10 +441,34 @@ func (c *collector) readSecondaryTypeJoin(row []mbdump.Field) error {
 	return nil
 }
 
+// emitAll hands each finished artist to emit and releases it, so peak memory
+// stays close to the collector's own footprint rather than growing with the
+// payloads produced from it.
+func (c *collector) emitAll(emit func(*skyhook.ArtistResource) error) error {
+	for id, a := range c.artistsByID {
+		if err := emit(c.artist(a)); err != nil {
+			return err
+		}
+		delete(c.artistsByID, id)
+	}
+	return nil
+}
+
 func (c *collector) assemble() (map[string]*skyhook.ArtistResource, error) {
 	out := make(map[string]*skyhook.ArtistResource, len(c.artistsByID))
-
 	for _, a := range c.artistsByID {
+		out[a.gid] = c.artist(a)
+	}
+	for gid := range c.want {
+		if _, ok := out[gid]; !ok {
+			return out, fmt.Errorf("artist %s not present in this export", gid)
+		}
+	}
+	return out, nil
+}
+
+func (c *collector) artist(a *artistRow) *skyhook.ArtistResource {
+	{
 		artist := &skyhook.ArtistResource{
 			ID:             a.gid,
 			OldIDs:         sortedUnique(a.oldIDs),
@@ -448,15 +495,8 @@ func (c *collector) assemble() (map[string]*skyhook.ArtistResource, error) {
 		sort.Slice(artist.Albums, func(i, j int) bool {
 			return albumLess(artist.Albums[i], artist.Albums[j])
 		})
-		out[a.gid] = artist
+		return artist
 	}
-
-	for gid := range c.want {
-		if _, ok := out[gid]; !ok {
-			return out, fmt.Errorf("artist %s not present in this export", gid)
-		}
-	}
-	return out, nil
 }
 
 func (c *collector) album(g *groupRow) skyhook.ArtistAlbumResource {

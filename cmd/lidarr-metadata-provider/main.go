@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nc1107/lidarr-metadata-provider/internal/dataset"
 	"github.com/nc1107/lidarr-metadata-provider/internal/musicbrainz"
 	"github.com/nc1107/lidarr-metadata-provider/internal/ratelimit"
 	"github.com/nc1107/lidarr-metadata-provider/internal/server"
@@ -37,9 +38,10 @@ func main() {
 
 func run() error {
 	var (
-		addr     = flag.String("addr", ":5001", "address to listen on")
-		web      = flag.Bool("web", false, "mount the local dev console at /ui")
-		fallback = flag.Bool("fallback", false,
+		addr        = flag.String("addr", ":5001", "address to listen on")
+		datasetPath = flag.String("dataset", "", "path to the dataset file to serve from")
+		web         = flag.Bool("web", false, "mount the local dev console at /ui")
+		fallback    = flag.Bool("fallback", false,
 			"query MusicBrainz live for lookups the dataset does not have (off by default; requires -contact)")
 		contact = flag.String("contact", "",
 			"contact URL or email identifying this instance to MusicBrainz, required by -fallback")
@@ -55,10 +57,32 @@ func run() error {
 
 	var chain source.Chain
 	var limiter *ratelimit.Limiter
+	var status server.DatasetStatus
 
-	// The dataset source lands here in Phase 1 and goes first in the chain,
-	// so the network is only consulted for what it does not have.
-	datasetLoaded := false
+	// The dataset goes first so the network is only consulted for what it
+	// does not already have.
+	if *datasetPath != "" {
+		reader, err := dataset.Open(*datasetPath)
+		if err != nil {
+			log.Error("refusing to start: the dataset could not be opened",
+				"path", *datasetPath, "err", err)
+			return err
+		}
+		defer reader.Close()
+
+		info := reader.Info()
+		chain = append(chain, reader)
+		status = server.DatasetStatus{
+			Present: true, Version: info.BuiltAt, ExportTimestamp: info.ExportStamp,
+			Artists: info.Artists, Albums: info.Albums, Tracks: info.Tracks,
+		}
+		if built, err := time.Parse(time.RFC3339, info.BuiltAt); err == nil {
+			status.InstalledAt = &built
+		}
+		log.Info("dataset loaded", "path", *datasetPath, "export", info.ExportStamp,
+			"artists", info.Artists, "albums", info.Albums, "tracks", info.Tracks)
+	}
+	datasetLoaded := status.Present
 
 	if *fallback {
 		if strings.TrimSpace(*contact) == "" {
@@ -82,15 +106,14 @@ func run() error {
 	// library, which is far worse than not coming up at all.
 	if !datasetLoaded && len(chain) == 0 {
 		log.Error("refusing to start: no metadata source available")
-		log.Error("no dataset is loaded", "reason",
-			"this build cannot load one yet, the dump-to-dataset pipeline is Phase 1 and unfinished")
+		log.Error("no dataset is loaded", "reason", "-dataset was not given")
 		log.Error("and live fallback is off", "reason", "-fallback was not passed")
-		log.Error("pick one", "option 1", "wait for the dataset pipeline (the intended offline setup)",
-			"option 2", "start with -fallback -contact you@example.com to answer from MusicBrainz live")
-		return errors.New("no metadata source: pass -fallback -contact <email or url>, or supply a dataset once Phase 1 lands")
+		log.Error("pick one", "option 1", "-dataset /path/to/dataset.db to serve offline",
+			"option 2", "-fallback -contact you@example.com to answer from MusicBrainz live")
+		return errors.New("no metadata source: pass -dataset <file>, or -fallback -contact <email or url>")
 	}
 
-	if !datasetLoaded {
+	if !datasetLoaded && len(chain) > 0 {
 		log.Warn("running without a dataset",
 			"impact", "every lookup goes to MusicBrainz over the network, paced at "+interval.String()+" per request",
 			"note", "this is a development configuration, not the intended offline setup")
@@ -98,8 +121,9 @@ func run() error {
 
 	srv := server.New(chain, server.Config{
 		Version:       version,
-		FallbackNames: chain.Names(),
+		FallbackNames: fallbackNames(chain),
 		EnableWebUI:   *web,
+		Dataset:       status,
 		Limiter:       limiter,
 		Logger:        log,
 	})
@@ -133,6 +157,19 @@ func run() error {
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	}
+}
+
+// fallbackNames lists the network sources in the chain. The dataset is
+// excluded because the console uses this to answer "does this instance ever
+// leave the machine", and the dataset never does.
+func fallbackNames(chain source.Chain) []string {
+	out := []string{}
+	for _, name := range chain.Names() {
+		if name != "dataset" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func consoleURL(addr string) string {

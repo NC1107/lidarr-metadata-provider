@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/checksum"
+	"github.com/nc1107/lidarr-metadata-provider/internal/dataset"
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/pipeline"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -37,6 +39,11 @@ func run(args []string) error {
 			return usage()
 		}
 		return verify(args[1], args[2:])
+	case "build":
+		if len(args) < 4 {
+			return usage()
+		}
+		return buildDataset(args[1], args[2], args[3])
 	case "build-artist":
 		if len(args) < 4 {
 			return usage()
@@ -57,6 +64,11 @@ func usage() error {
       Check downloaded archives against the export's published manifest
       before building from them. A truncated download otherwise produces a
       dataset that is quietly missing rows.
+
+  pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db>
+      Build the full dataset the server loads. Reads each archive once and
+      streams artists into the output, so it is bounded by the join tables
+      rather than by the number of payloads produced.
 
   pipeline build-artist <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <mbid>...
       Build artist payloads straight from the export and print them. Both
@@ -225,4 +237,72 @@ func verify(manifestPath string, files []string) error {
 		return fmt.Errorf("%d of %d file(s) failed verification", failed, len(files))
 	}
 	return nil
+}
+
+// buildDataset produces the file the server loads.
+func buildDataset(corePath, derivedPath, outPath string) error {
+	core, err := mbdump.Open(corePath)
+	if err != nil {
+		return err
+	}
+	derived, err := mbdump.Open(derivedPath)
+	if err != nil {
+		return err
+	}
+	info, err := core.Info()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "export %s (schema %d, replication %d)\nbuilding %s\n",
+		info.Timestamp, info.SchemaSequence, info.ReplicationSequence, outPath)
+
+	writer, err := dataset.Create(outPath)
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	written := 0
+	err = pipeline.BuildAllArtists(core, derived, func(a *skyhook.ArtistResource) error {
+		written++
+		// A build runs for minutes with no other output, and a silent process
+		// is indistinguishable from a hung one.
+		if written%100_000 == 0 {
+			fmt.Fprintf(os.Stderr, "  %s artists written, %s elapsed\n",
+				humanCount(written), time.Since(start).Round(time.Second))
+		}
+		return writer.AddArtist(a)
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := writer.Finish(info.Timestamp, info.ReplicationSequence); err != nil {
+		return err
+	}
+	artists, albums, tracks := writer.Counts()
+
+	size := int64(0)
+	if st, err := os.Stat(outPath); err == nil {
+		size = st.Size()
+	}
+	fmt.Fprintf(os.Stderr, "done in %s: %s artists, %s albums, %s tracks, %.2f GB\n",
+		time.Since(start).Round(time.Second), humanCount(int(artists)),
+		humanCount(int(albums)), humanCount(int(tracks)), float64(size)/(1<<30))
+	return nil
+}
+
+func humanCount(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	var out []byte
+	for i, c := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, c)
+	}
+	return string(out)
 }
