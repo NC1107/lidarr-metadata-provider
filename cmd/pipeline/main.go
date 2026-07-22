@@ -68,7 +68,6 @@ func usage() error {
 }
 
 func inspect(path string, rest []string) error {
-
 	archive, err := mbdump.Open(path)
 	if err != nil {
 		return err
