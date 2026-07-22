@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
+	"github.com/nc1107/lidarr-metadata-provider/internal/source"
 )
 
 //go:embed ui.html
@@ -72,6 +73,11 @@ type uiItem struct {
 	// statuses.
 	Severe       bool   `json:"severe"`
 	SevereReason string `json:"severeReason,omitempty"`
+
+	// Image is the artwork URL a source returned, if any. MusicBrainz carries
+	// no artwork at all, so this is one of the clearest ways to see what
+	// build-time enrichment would still have to add.
+	Image string `json:"image,omitempty"`
 }
 
 // verdict is the one-line answer the console leads with.
@@ -111,16 +117,70 @@ func (s *Server) handleUIQuery(w http.ResponseWriter, r *http.Request) {
 	mode := q.Get("mode")
 	query := strings.ToLower(strings.TrimSpace(q.Get("query")))
 	artist := strings.ToLower(strings.TrimSpace(q.Get("artist")))
+	// Comparison sources are opt in. Each one costs a round trip to somebody
+	// else's service, so nothing is queried unless it was asked for.
+	against := map[string]bool{}
+	for _, name := range strings.Split(q.Get("against"), ",") {
+		if name != "" {
+			against[name] = true
+		}
+	}
 
-	local := s.queryLocal(r, mode, query, artist)
+	out := map[string]any{"local": s.queryLocal(r, mode, query, artist)}
+	local := out["local"].(sideResult)
 
-	out := map[string]any{"local": local}
-	if q.Get("compare") != "0" {
+	if against["musicbrainz"] {
+		if src, ok := s.cfg.Compare["musicbrainz"]; ok {
+			out["musicbrainz"] = s.querySource(r, src, "MusicBrainz",
+				"musicbrainz.org, queried live", mode, query, artist)
+		}
+	}
+	if against["official"] {
 		official := s.queryOfficial(r, mode, query, artist)
 		out["official"] = official
 		out["verdict"] = compare(local, official)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// querySource runs the same lookup against one comparison source.
+func (s *Server) querySource(r *http.Request, src source.Source, label, origin, mode, query, artist string) sideResult {
+	res := sideResult{Label: label, Origin: origin}
+	start := time.Now()
+
+	var payload any
+	var err error
+	switch mode {
+	case "artist":
+		payload, err = src.SearchArtists(r.Context(), query, 0)
+	case "album":
+		payload, err = src.SearchAlbums(r.Context(), query, artist, 0)
+	case "all":
+		var artists []skyhook.ArtistResource
+		if artists, err = src.SearchArtists(r.Context(), query, 0); err == nil {
+			entities := make([]skyhook.EntityResource, 0, len(artists))
+			for i := range artists {
+				entities = append(entities, skyhook.EntityResource{Score: scoreFor(i), Artist: &artists[i]})
+			}
+			payload = entities
+		}
+	case "artist-id":
+		payload, err = src.Artist(r.Context(), query)
+	case "album-id":
+		payload, err = src.Album(r.Context(), query)
+	default:
+		err = fmt.Errorf("pick a search type")
+	}
+	res.Took = time.Since(start).Milliseconds()
+
+	if err != nil {
+		res.Error = err.Error()
+		res.Raw = json.RawMessage("null")
+		return res
+	}
+	raw, _ := json.Marshal(payload)
+	res.fill(mode, raw)
+	return res
 }
 
 func (s *Server) queryLocal(r *http.Request, mode, query, artist string) sideResult {
@@ -393,6 +453,7 @@ func artistItems(artists []skyhook.ArtistResource) []uiItem {
 			Albums: len(a.Albums), Hidden: len(a.Albums) > 0,
 		}
 		item.Visible = len(skyhook.StandardProfile.Filter(a.Albums))
+		item.Image = firstImage(a.Images)
 
 		// An album with no release statuses is invisible to every profile,
 		// so it is worth calling out separately from ordinary filtering.
@@ -426,7 +487,7 @@ func albumItems(albums []skyhook.AlbumResource) []uiItem {
 
 		item := uiItem{
 			Kind: "album", Title: al.Title, Subtitle: strings.Join(names, ", "),
-			ID: al.ID, Type: typ, Detail: releaseDetail(al),
+			ID: al.ID, Type: typ, Detail: releaseDetail(al), Image: firstImage(al.Images),
 		}
 		if len(al.ReleaseStatuses) == 0 {
 			item.Severe = true
@@ -462,4 +523,20 @@ func plural(n int, one, many string) string {
 		return fmt.Sprintf("%d %s", n, one)
 	}
 	return fmt.Sprintf("%d %s", n, many)
+}
+
+// firstImage prefers a cover over any other artwork, which is what a person
+// scanning a list expects to see.
+func firstImage(images []skyhook.ImageResource) string {
+	for _, img := range images {
+		if strings.EqualFold(img.CoverType, "Cover") && img.URL != "" {
+			return img.URL
+		}
+	}
+	for _, img := range images {
+		if img.URL != "" {
+			return img.URL
+		}
+	}
+	return ""
 }

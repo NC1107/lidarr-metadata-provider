@@ -35,6 +35,10 @@ type Config struct {
 	// release and finds nothing needs to know whether the dataset is stale
 	// before blaming the server.
 	Dataset DatasetStatus
+	// Compare holds sources the console can query side by side with the
+	// server's own answer. These are never used to serve Lidarr, only to show
+	// an operator where the sources disagree.
+	Compare map[string]source.Source
 	// Limiter is exposed to the dev UI so queue state is visible. May be nil.
 	Limiter *ratelimit.Limiter
 	Logger  *slog.Logger

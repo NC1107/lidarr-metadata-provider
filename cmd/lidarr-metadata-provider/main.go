@@ -59,6 +59,7 @@ func run() error {
 
 	var chain source.Chain
 	var limiter *ratelimit.Limiter
+	compare := map[string]source.Source{}
 	var status server.DatasetStatus
 
 	// The dataset goes first so the network is only consulted for what it
@@ -112,7 +113,11 @@ func run() error {
 		limiter = ratelimit.New(*interval)
 		client := musicbrainz.New(musicbrainz.UserAgent(version, *contact), limiter)
 		client.MaxPages = *maxPages
-		chain = append(chain, source.FromMusicBrainz(client))
+		mb := source.FromMusicBrainz(client)
+		chain = append(chain, mb)
+		// Also offered to the console as a comparison source, so an operator
+		// can see the dataset and MusicBrainz side by side.
+		compare["musicbrainz"] = mb
 		log.Info("live fallback enabled",
 			"contact", *contact,
 			"interval", interval.String(),
@@ -142,6 +147,7 @@ func run() error {
 		FallbackNames: fallbackNames(chain),
 		EnableWebUI:   *web,
 		Dataset:       status,
+		Compare:       compare,
 		Limiter:       limiter,
 		Logger:        log,
 	})
