@@ -8,15 +8,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// staging holds the release, medium and track rows an album payload is
-// assembled from.
+// staging holds the track and recording rows an album payload is assembled
+// from.
 //
-// These live on disk rather than in memory because they cannot fit in it: an
+// Only these two go to disk, because only these two are too large to hold: an
 // export carries roughly 35 million tracks and 30 million recordings, which
-// is tens of gigabytes as Go structs. Writing them to SQLite and letting it
-// do the join keeps a build inside the memory a CI runner actually has, at
-// the cost of a slower build, which is the right way round for a job that
-// runs twice a week on a machine nobody is waiting on.
+// is tens of gigabytes as Go structs. Everything else an album needs, its
+// releases and media, is a few hundred megabytes and stays in memory where
+// assembling a payload does not have to query for it.
 //
 // Indexes are created after loading, never during. Maintaining an index
 // across 35 million individual inserts is dramatically slower than building
@@ -37,32 +36,22 @@ PRAGMA journal_mode = OFF;
 PRAGMA synchronous = OFF;
 PRAGMA cache_size = -200000;
 
-CREATE TABLE s_release   (id INTEGER PRIMARY KEY, gid TEXT, name TEXT, rg INTEGER, status INTEGER, comment TEXT);
-CREATE TABLE s_medium    (id INTEGER PRIMARY KEY, rel INTEGER, position INTEGER, format INTEGER, name TEXT, track_count INTEGER);
-CREATE TABLE s_track     (medium INTEGER, position INTEGER, number TEXT, name TEXT, recording INTEGER, length INTEGER, gid TEXT, credit INTEGER);
+-- rg is resolved at load time so the emit pass can read tracks in album
+-- order without joining back through medium and release.
+CREATE TABLE s_track     (rg INTEGER, medium INTEGER, position INTEGER, number TEXT,
+                          name TEXT, recording INTEGER, length INTEGER, gid TEXT, credit INTEGER);
 CREATE TABLE s_recording (id INTEGER PRIMARY KEY, gid TEXT);
-CREATE TABLE s_rel_label (rel INTEGER, label INTEGER);
-CREATE TABLE s_rel_country (rel INTEGER, area INTEGER, y INTEGER, m INTEGER, d INTEGER);
-CREATE TABLE s_rel_date  (rel INTEGER, y INTEGER, m INTEGER, d INTEGER);
 `
 
+// Ordering the index the same way the emit pass reads lets that scan walk the
+// index directly instead of sorting 35 million rows into a temp file.
 const stagingIndexes = `
-CREATE INDEX idx_release_rg ON s_release(rg);
-CREATE INDEX idx_medium_rel ON s_medium(rel);
-CREATE INDEX idx_track_medium ON s_track(medium);
-CREATE INDEX idx_rel_label ON s_rel_label(rel);
-CREATE INDEX idx_rel_country ON s_rel_country(rel);
-CREATE INDEX idx_rel_date ON s_rel_date(rel);
+CREATE INDEX idx_track_album ON s_track(rg, medium, position);
 `
 
 var stagingInserts = map[string]string{
-	"release":   `INSERT INTO s_release VALUES (?,?,?,?,?,?)`,
-	"medium":    `INSERT INTO s_medium VALUES (?,?,?,?,?,?)`,
-	"track":     `INSERT INTO s_track VALUES (?,?,?,?,?,?,?,?)`,
+	"track":     `INSERT INTO s_track VALUES (?,?,?,?,?,?,?,?,?)`,
 	"recording": `INSERT INTO s_recording VALUES (?,?)`,
-	"label":     `INSERT INTO s_rel_label VALUES (?,?)`,
-	"country":   `INSERT INTO s_rel_country VALUES (?,?,?,?,?)`,
-	"date":      `INSERT INTO s_rel_date VALUES (?,?,?,?)`,
 }
 
 func newStaging(path string) (*staging, error) {

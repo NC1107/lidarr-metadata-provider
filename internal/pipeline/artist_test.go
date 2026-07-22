@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -39,6 +40,10 @@ func fakeExport(t *testing.T, which []string, tables map[string]string) string {
 		"SCHEMA_SEQUENCE":      "31\n",
 		"REPLICATION_SEQUENCE": "187552\n",
 	}
+	// tar delivers table files in alphabetical order, and the single pass
+	// depends on that ordering, so the fixture has to reproduce it rather
+	// than whatever order the caller happened to list.
+	sort.Strings(which)
 	for _, name := range which {
 		body := tables[name]
 		if body != "" && !strings.HasSuffix(body, "\n") {

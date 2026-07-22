@@ -93,22 +93,6 @@ func BuildAll(core, derived *mbdump.Archive, stagingPath string, emit Emitter) e
 	return c.emitAll(emit.Artist)
 }
 
-// emitAlbums assembles every album payload. Artists are emitted afterwards
-// because album assembly reads artist rows to fill in credits, so dropping
-// them first would empty the credits on every album.
-func (c *collector) emitAlbums(emit func(*skyhook.AlbumResource) error) error {
-	for _, g := range c.groups {
-		album, err := c.fullAlbum(g)
-		if err != nil {
-			return err
-		}
-		if err := emit(album); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // scan reads both archives into a collector. want limits which artists are
 // kept; nil keeps all of them.
 func scan(core, derived *mbdump.Archive, want map[string]bool, stagingPath string) (*collector, error) {
@@ -227,6 +211,13 @@ type collector struct {
 	mediumFormats map[int]string
 	labelNames    map[int]string
 	countryCodes  map[int]string
+
+	// Media arrive before the releases that own them, so they are buffered
+	// here until the release claims them.
+	pendingMedia  map[int][]mediumRow
+	releaseByID   map[int]*releaseRow
+	releasesByRG  map[int][]*releaseRow
+	mediumToGroup map[int]int
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -245,6 +236,10 @@ func newCollector(want map[string]bool) *collector {
 		mediumFormats:  map[int]string{},
 		labelNames:     map[int]string{},
 		countryCodes:   map[int]string{},
+		pendingMedia:   map[int][]mediumRow{},
+		releaseByID:    map[int]*releaseRow{},
+		releasesByRG:   map[int][]*releaseRow{},
+		mediumToGroup:  map[int]int{},
 	}
 }
 

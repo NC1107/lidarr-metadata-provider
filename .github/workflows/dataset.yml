@@ -1,0 +1,166 @@
+# Builds the dataset artifact users download, on a schedule, unattended.
+#
+# This workflow is the answer to "does depending on this project make its
+# maintainer a bottleneck". Nobody produces these by hand: MusicBrainz
+# publishes a full export twice a week, this runs after each one, and the
+# result is attached to a release with its checksum.
+name: dataset
+
+on:
+  schedule:
+    # MusicBrainz exports land Wednesday and Saturday around 00:20 UTC.
+    # Running well after gives the mirror time to finish publishing, and the
+    # offset keeps this off the top of the hour, which is when every other
+    # scheduled job on the planet fires.
+    - cron: "37 6 * * 3,6"
+  workflow_dispatch:
+    inputs:
+      export:
+        description: "Export stamp to build, for example 20260718-002132. Defaults to the latest."
+        required: false
+      publish:
+        description: "Attach the result to a release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # A full build reads two archives and writes tens of millions of staging
+    # rows. The job cap is six hours; this leaves room without hiding a hang.
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A standard runner starts with roughly 21-29 GB free, and a build needs
+      # the two archives plus several gigabytes of staging plus the output.
+      # Reclaiming the preinstalled toolchains is what makes it fit.
+      - name: Reclaim disk space
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /usr/local/lib/node_modules \
+                      "$AGENT_TOOLSDIRECTORY" || true
+          sudo apt-get clean || true
+          echo "after:"; df -h / | tail -1
+
+      # bzip2 stores independent blocks, so decompression parallelises. The
+      # single threaded decoder is the slowest part of a build by a wide
+      # margin, and the pipeline picks this up automatically when present.
+      - name: Install lbzip2
+        run: sudo apt-get install -y lbzip2
+
+      - name: Build tools
+        run: go build -o bin/pipeline ./cmd/pipeline
+
+      - name: Resolve export
+        id: export
+        run: |
+          set -euo pipefail
+          BASE=https://data.metabrainz.org/pub/musicbrainz/data/fullexport
+          STAMP="${{ inputs.export }}"
+          if [ -z "$STAMP" ]; then
+            STAMP=$(curl -fsS -A "$UA" "$BASE/LATEST" | tr -d '\n')
+          fi
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+          echo "base=$BASE/$STAMP" >> "$GITHUB_OUTPUT"
+          echo "Building from $STAMP"
+        env:
+          UA: "LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
+
+      - name: Download export
+        run: |
+          set -euo pipefail
+          UA="LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
+          mkdir -p dumps && cd dumps
+          for f in mbdump.tar.bz2 mbdump-derived.tar.bz2 SHA256SUMS; do
+            curl -fsSL -A "$UA" -O "${{ steps.export.outputs.base }}/$f"
+          done
+          ls -lh
+
+      # A truncated download does not announce itself. It produces a dataset
+      # quietly missing rows, which is worse than a build that fails.
+      - name: Verify download
+        run: ./bin/pipeline verify dumps/SHA256SUMS dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2
+
+      - name: Build dataset
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v ./bin/pipeline build \
+            dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2 dataset.db \
+            2>&1 | tee build.log | grep -Ev "^\s" || true
+          grep -E "Maximum resident|Elapsed \(wall" build.log || true
+
+      # The archives are the largest thing on disk and are finished with by
+      # now. Removing them leaves room to compress and upload.
+      - name: Free the archives
+        run: rm -rf dumps && df -h / | tail -1
+
+      - name: Checksum
+        id: artifact
+        run: |
+          set -euo pipefail
+          sha256sum dataset.db | awk '{print $1}' > dataset.db.sha256
+          echo "size=$(du -h dataset.db | cut -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cat dataset.db.sha256)" >> "$GITHUB_OUTPUT"
+
+      # Proves the artifact opens and answers before anyone downloads it. A
+      # dataset that builds but cannot be served is worse than a failed build,
+      # because it looks like a success.
+      - name: Smoke test the artifact
+        run: |
+          set -euo pipefail
+          go build -o bin/server ./cmd/lidarr-metadata-provider
+          ./bin/server -dataset dataset.db -addr :5001 &
+          for i in $(seq 30); do
+            curl -fsS http://127.0.0.1:5001/ >/dev/null 2>&1 && break || sleep 1
+          done
+          curl -fsS http://127.0.0.1:5001/ | tee /dev/stderr | grep -q replication_date
+          curl -fsS "http://127.0.0.1:5001/artist/b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print('Beatles albums:', len(d['Albums'])); sys.exit(0 if len(d['Albums']) > 500 else 1)"
+          kill %1
+
+      - name: Publish
+        if: inputs.publish != false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="dataset-${{ steps.export.outputs.stamp }}"
+          gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$(cat <<EOF
+          Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`.
+
+          | | |
+          | --- | --- |
+          | Size | ${{ steps.artifact.outputs.size }} |
+          | SHA-256 | \`${{ steps.artifact.outputs.sha }}\` |
+
+          The container downloads and verifies this automatically. To use it
+          directly, point the server at the file:
+
+          \`\`\`
+          lidarr-metadata-provider -dataset dataset.db
+          \`\`\`
+
+          Prefer not to depend on these builds? The pipeline that produced
+          this ships in the same image, see \`docs/BUILDING.md\`.
+          EOF
+          )" || echo "release exists, updating assets"
+          gh release upload "$TAG" dataset.db dataset.db.sha256 --clobber
+
+      - name: Build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 30

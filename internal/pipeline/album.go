@@ -9,9 +9,45 @@ import (
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
 )
 
+// Album assembly reads tracks in one ordered pass rather than querying per
+// album.
+//
+// The obvious shape, "for each album fetch its releases and their tracks", is
+// unusable at this scale. Four million albums times a handful of queries each
+// is tens of millions of round trips: a measured run emitted fewer than a
+// hundred thousand albums in half an hour, which extrapolates to about a day.
+// Instead every table except tracks is held in memory, tracks are streamed
+// once in album order, and the two are merged.
+//
+// Only tracks and recordings go to disk, because only they are too large to
+// hold: roughly 35 million and 30 million rows. Releases and media together
+// are a few hundred megabytes, which is worth spending to avoid the join.
+
+type mediumRow struct {
+	id         int
+	position   int
+	format     int
+	name       string
+	trackCount int
+}
+
+type releaseRow struct {
+	id       int
+	gid      string
+	name     string
+	statusID int
+	media    []mediumRow
+
+	labels    []int
+	countries []int
+
+	year, month, day int
+	hasDate          bool
+}
+
 // albumHandlers reads the tables an album payload needs. They are only
-// installed when a build is producing albums, since streaming 35 million
-// track rows into staging is most of a build's cost and pointless otherwise.
+// installed when a build produces albums, since streaming tens of millions of
+// track rows is most of a build's cost and pointless otherwise.
 func (c *collector) albumHandlers() map[string]mbdump.RowFunc {
 	return map[string]mbdump.RowFunc{
 		"medium":                  c.readMedium,
@@ -26,6 +62,8 @@ func (c *collector) albumHandlers() map[string]mbdump.RowFunc {
 	}
 }
 
+// readMedium buffers media by release. Tar order puts medium before release,
+// so the release it belongs to has not been read yet.
 func (c *collector) readMedium(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("medium", row, mbdump.MediumColumns); err != nil {
 		return err
@@ -41,56 +79,110 @@ func (c *collector) readMedium(row []mbdump.Field) error {
 	position, _ := optInt(row[mbdump.MediumPosition])
 	format, _ := optInt(row[mbdump.MediumFormat])
 	trackCount, _ := optInt(row[mbdump.MediumTrackCount])
-	return c.staging.insert("medium", id, release, position, format,
-		row[mbdump.MediumName].Value, trackCount)
+
+	c.pendingMedia[release] = append(c.pendingMedia[release], mediumRow{
+		id: id, position: position, format: format,
+		name: row[mbdump.MediumName].Value, trackCount: trackCount,
+	})
+	return nil
 }
 
-func (c *collector) readTrack(row []mbdump.Field) error {
-	if err := mbdump.CheckColumns("track", row, mbdump.TrackColumns); err != nil {
+// readReleaseStaged records a release and claims the media buffered for it.
+func (c *collector) readReleaseStaged(row []mbdump.Field) error {
+	if err := c.readRelease(row); err != nil {
 		return err
 	}
-	medium, err := atoi(row[mbdump.TrackMedium])
+	id, err := atoi(row[mbdump.ReleaseID])
 	if err != nil {
 		return err
 	}
-	position, _ := optInt(row[mbdump.TrackPosition])
-	recording, _ := optInt(row[mbdump.TrackRecording])
-	credit, _ := optInt(row[mbdump.TrackArtistCredit])
-
-	// Length is genuinely unknown for many tracks, and a zero would claim a
-	// duration rather than admit there isn't one.
-	var length any
-	if ms, ok := optInt(row[mbdump.TrackLength]); ok {
-		length = ms
-	}
-	return c.staging.insert("track", medium, position, row[mbdump.TrackNumber].Value,
-		row[mbdump.TrackName].Value, recording, length, row[mbdump.TrackGID].Value, credit)
-}
-
-func (c *collector) readRecording(row []mbdump.Field) error {
-	if err := mbdump.CheckColumns("recording", row, mbdump.RecordingColumns); err != nil {
-		return err
-	}
-	id, err := atoi(row[mbdump.RecordingID])
+	rg, err := atoi(row[mbdump.ReleaseGroupRef])
 	if err != nil {
 		return err
 	}
-	return c.staging.insert("recording", id, row[mbdump.RecordingGID].Value)
+	status, _ := optInt(row[mbdump.ReleaseStatusID])
+
+	rel := &releaseRow{
+		id: id, gid: row[mbdump.ReleaseGID].Value,
+		name: row[mbdump.ReleaseName].Value, statusID: status,
+		media: c.pendingMedia[id],
+	}
+	delete(c.pendingMedia, id)
+
+	c.releaseByID[id] = rel
+	c.releasesByRG[rg] = append(c.releasesByRG[rg], rel)
+
+	// Tracks arrive later carrying only a medium id, so the path back to an
+	// album has to be recorded now, while both ends are known.
+	for _, m := range rel.media {
+		c.mediumToGroup[m.id] = rg
+	}
+	return nil
+}
+
+func (c *collector) readReleaseCountry(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("release_country", row, mbdump.ReleaseCountryColumns); err != nil {
+		return err
+	}
+	id, err := atoi(row[mbdump.ReleaseCountryRelease])
+	if err != nil {
+		return err
+	}
+	rel, ok := c.releaseByID[id]
+	if !ok {
+		return nil
+	}
+	if area, ok := optInt(row[mbdump.ReleaseCountryArea]); ok {
+		rel.countries = append(rel.countries, area)
+	}
+	y, _ := optInt(row[mbdump.ReleaseCountryYear])
+	m, _ := optInt(row[mbdump.ReleaseCountryMonth])
+	d, _ := optInt(row[mbdump.ReleaseCountryDay])
+	// A release can appear in several countries on different dates, and the
+	// earliest is when it actually came out.
+	if y > 0 && (!rel.hasDate || earlier(y, m, d, rel.year, rel.month, rel.day)) {
+		rel.year, rel.month, rel.day, rel.hasDate = y, m, d, true
+	}
+	return nil
+}
+
+func (c *collector) readReleaseDate(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("release_unknown_country", row, mbdump.ReleaseUnknownCountryColumns); err != nil {
+		return err
+	}
+	id, err := atoi(row[mbdump.ReleaseUnknownCountryRelease])
+	if err != nil {
+		return err
+	}
+	rel, ok := c.releaseByID[id]
+	if !ok {
+		return nil
+	}
+	y, _ := optInt(row[mbdump.ReleaseUnknownCountryYear])
+	m, _ := optInt(row[mbdump.ReleaseUnknownCountryMonth])
+	d, _ := optInt(row[mbdump.ReleaseUnknownCountryDay])
+	if y > 0 && !rel.hasDate {
+		rel.year, rel.month, rel.day, rel.hasDate = y, m, d, true
+	}
+	return nil
 }
 
 func (c *collector) readReleaseLabel(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("release_label", row, mbdump.ReleaseLabelColumns); err != nil {
 		return err
 	}
-	release, err := atoi(row[mbdump.ReleaseLabelRelease])
+	id, err := atoi(row[mbdump.ReleaseLabelRelease])
 	if err != nil {
 		return err
 	}
-	label, ok := optInt(row[mbdump.ReleaseLabelLabel])
+	rel, ok := c.releaseByID[id]
 	if !ok {
 		return nil
 	}
-	return c.staging.insert("label", release, label)
+	if label, ok := optInt(row[mbdump.ReleaseLabelLabel]); ok {
+		rel.labels = append(rel.labels, label)
+	}
+	return nil
 }
 
 func (c *collector) readLabel(row []mbdump.Field) error {
@@ -105,35 +197,6 @@ func (c *collector) readLabel(row []mbdump.Field) error {
 	return nil
 }
 
-func (c *collector) readReleaseCountry(row []mbdump.Field) error {
-	if err := mbdump.CheckColumns("release_country", row, mbdump.ReleaseCountryColumns); err != nil {
-		return err
-	}
-	release, err := atoi(row[mbdump.ReleaseCountryRelease])
-	if err != nil {
-		return err
-	}
-	area, _ := optInt(row[mbdump.ReleaseCountryArea])
-	y, _ := optInt(row[mbdump.ReleaseCountryYear])
-	m, _ := optInt(row[mbdump.ReleaseCountryMonth])
-	d, _ := optInt(row[mbdump.ReleaseCountryDay])
-	return c.staging.insert("country", release, area, y, m, d)
-}
-
-func (c *collector) readReleaseDate(row []mbdump.Field) error {
-	if err := mbdump.CheckColumns("release_unknown_country", row, mbdump.ReleaseUnknownCountryColumns); err != nil {
-		return err
-	}
-	release, err := atoi(row[mbdump.ReleaseUnknownCountryRelease])
-	if err != nil {
-		return err
-	}
-	y, _ := optInt(row[mbdump.ReleaseUnknownCountryYear])
-	m, _ := optInt(row[mbdump.ReleaseUnknownCountryMonth])
-	d, _ := optInt(row[mbdump.ReleaseUnknownCountryDay])
-	return c.staging.insert("date", release, y, m, d)
-}
-
 func (c *collector) readISO(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("iso_3166_1", row, mbdump.ISOColumns); err != nil {
 		return err
@@ -146,28 +209,126 @@ func (c *collector) readISO(row []mbdump.Field) error {
 	return nil
 }
 
-// readReleaseStaged records the release itself in addition to its status,
-// which the artist build already needed.
-func (c *collector) readReleaseStaged(row []mbdump.Field) error {
-	if err := c.readRelease(row); err != nil {
+func (c *collector) readRecording(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("recording", row, mbdump.RecordingColumns); err != nil {
 		return err
 	}
-	id, err := atoi(row[mbdump.ReleaseID])
+	id, err := atoi(row[mbdump.RecordingID])
 	if err != nil {
 		return err
 	}
-	rg, err := atoi(row[mbdump.ReleaseGroupRef])
-	if err != nil {
-		return err
-	}
-	status, _ := optInt(row[mbdump.ReleaseStatusID])
-	return c.staging.insert("release", id, row[mbdump.ReleaseGID].Value,
-		row[mbdump.ReleaseName].Value, rg, status, "")
+	return c.staging.insert("recording", id, row[mbdump.RecordingGID].Value)
 }
 
-// album assembles one full album payload by querying staging for its
-// releases, media and tracks.
-func (c *collector) fullAlbum(g *groupRow) (*skyhook.AlbumResource, error) {
+// readTrack stages a track with its album already resolved, so the emit pass
+// can read tracks in album order without joining back through medium and
+// release.
+func (c *collector) readTrack(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("track", row, mbdump.TrackColumns); err != nil {
+		return err
+	}
+	medium, err := atoi(row[mbdump.TrackMedium])
+	if err != nil {
+		return err
+	}
+	rg, ok := c.mediumToGroup[medium]
+	if !ok {
+		return nil
+	}
+	position, _ := optInt(row[mbdump.TrackPosition])
+	recording, _ := optInt(row[mbdump.TrackRecording])
+	credit, _ := optInt(row[mbdump.TrackArtistCredit])
+
+	// Length is genuinely unknown for many tracks, and a zero would claim a
+	// duration rather than admit there is not one.
+	var length any
+	if ms, ok := optInt(row[mbdump.TrackLength]); ok {
+		length = ms
+	}
+	return c.staging.insert("track", rg, medium, position, row[mbdump.TrackNumber].Value,
+		row[mbdump.TrackName].Value, recording, length, row[mbdump.TrackGID].Value, credit)
+}
+
+// stagedTrack is one row of the ordered track stream.
+type stagedTrack struct {
+	group     int
+	medium    int
+	position  int
+	number    string
+	name      string
+	gid       string
+	length    sql.NullInt64
+	credit    int
+	recording sql.NullString
+}
+
+// emitAlbums walks albums in id order alongside one ordered scan of the track
+// table, so every track row is read exactly once.
+func (c *collector) emitAlbums(emit func(*skyhook.AlbumResource) error) error {
+	ids := make([]int, 0, len(c.groups))
+	for id := range c.groups {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+
+	rows, err := c.staging.db.Query(`
+		SELECT t.rg, t.medium, t.position, t.number, t.name, t.gid, t.length, t.credit, r.gid
+		FROM s_track t LEFT JOIN s_recording r ON r.id = t.recording
+		ORDER BY t.rg, t.medium, t.position`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	stream := &trackStream{rows: rows}
+	for _, id := range ids {
+		tracks, err := stream.take(id)
+		if err != nil {
+			return err
+		}
+		if err := emit(c.fullAlbum(c.groups[id], tracks)); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// trackStream hands out one album's tracks at a time from a single forward
+// scan.
+type trackStream struct {
+	rows *sql.Rows
+	held stagedTrack
+	have bool
+}
+
+func (s *trackStream) take(group int) ([]stagedTrack, error) {
+	var out []stagedTrack
+	for {
+		if !s.have {
+			if !s.rows.Next() {
+				return out, s.rows.Err()
+			}
+			var t stagedTrack
+			if err := s.rows.Scan(&t.group, &t.medium, &t.position, &t.number,
+				&t.name, &t.gid, &t.length, &t.credit, &t.recording); err != nil {
+				return out, err
+			}
+			s.held, s.have = t, true
+		}
+		switch {
+		case s.held.group == group:
+			out = append(out, s.held)
+			s.have = false
+		case s.held.group < group:
+			// Belongs to an album already passed, so it has no home here.
+			s.have = false
+		default:
+			return out, nil
+		}
+	}
+}
+
+func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumResource {
 	artists := make([]skyhook.AlbumArtistResource, 0, len(g.artistIDs))
 	artistID := ""
 	for _, id := range g.artistIDs {
@@ -181,9 +342,19 @@ func (c *collector) fullAlbum(g *groupRow) (*skyhook.AlbumResource, error) {
 		artists = append(artists, c.albumArtist(a))
 	}
 
-	releases, statuses, err := c.releasesFor(g.id)
-	if err != nil {
-		return nil, err
+	byMedium := map[int][]stagedTrack{}
+	for _, t := range tracks {
+		byMedium[t.medium] = append(byMedium[t.medium], t)
+	}
+
+	releases := make([]skyhook.ReleaseResource, 0, len(c.releasesByRG[g.id]))
+	statusSet := map[string]bool{}
+	for _, rel := range c.releasesByRG[g.id] {
+		status := c.statusNames[rel.statusID]
+		if status != "" {
+			statusSet[status] = true
+		}
+		releases = append(releases, c.release(rel, status, byMedium))
 	}
 
 	secondary := make([]string, 0, len(g.secondary))
@@ -203,7 +374,7 @@ func (c *collector) fullAlbum(g *groupRow) (*skyhook.AlbumResource, error) {
 		Overview:        nil,
 		Type:            c.primaryType(g.typeID),
 		SecondaryTypes:  secondary,
-		ReleaseStatuses: statuses,
+		ReleaseStatuses: sortedKeys(statusSet),
 		ReleaseDate:     formatDate(g),
 		ArtistID:        artistID,
 		Artists:         artists,
@@ -212,7 +383,95 @@ func (c *collector) fullAlbum(g *groupRow) (*skyhook.AlbumResource, error) {
 		Links:           []skyhook.LinkResource{},
 		Rating:          skyhook.RatingResource{},
 		Releases:        releases,
-	}, nil
+	}
+}
+
+func (c *collector) release(rel *releaseRow, status string, byMedium map[int][]stagedTrack) skyhook.ReleaseResource {
+	countries := make([]string, 0, len(rel.countries))
+	for _, area := range rel.countries {
+		if code, ok := c.countryCodes[area]; ok && code != "" {
+			countries = append(countries, code)
+		}
+	}
+	sort.Strings(countries)
+
+	labels := make([]string, 0, len(rel.labels))
+	seen := map[string]bool{}
+	for _, id := range rel.labels {
+		if name, ok := c.labelNames[id]; ok && name != "" && !seen[name] {
+			seen[name] = true
+			labels = append(labels, name)
+		}
+	}
+	sort.Strings(labels)
+
+	out := skyhook.ReleaseResource{
+		ID: rel.gid, OldIDs: []string{}, Title: rel.name, Status: status,
+		Country: countries, Label: labels, ReleaseDate: releaseDate(rel),
+		Media:  make([]skyhook.MediumResource, 0, len(rel.media)),
+		Tracks: []skyhook.TrackResource{},
+	}
+
+	media := append([]mediumRow(nil), rel.media...)
+	sort.Slice(media, func(i, j int) bool { return media[i].position < media[j].position })
+
+	for _, m := range media {
+		out.Media = append(out.Media, skyhook.MediumResource{
+			Name: m.name, Format: c.mediumFormats[m.format], Position: m.position,
+		})
+		out.TrackCount += m.trackCount
+		for _, t := range byMedium[m.id] {
+			out.Tracks = append(out.Tracks, c.track(t, m.position))
+		}
+	}
+	return out
+}
+
+func (c *collector) track(t stagedTrack, mediumPosition int) skyhook.TrackResource {
+	track := skyhook.TrackResource{
+		ID: t.gid, OldIDs: []string{}, OldRecordingIDs: []string{},
+		RecordingID: t.recording.String, TrackName: t.name,
+		TrackNumber: t.number, TrackPosition: t.position, MediumNumber: mediumPosition,
+	}
+	if t.length.Valid {
+		ms := int(t.length.Int64)
+		track.DurationMs = &ms
+	}
+	if track.TrackNumber == "" {
+		track.TrackNumber = fmt.Sprint(t.position)
+	}
+	for _, artistID := range c.creditArtists[t.credit] {
+		if a, ok := c.artistsByID[artistID]; ok {
+			track.ArtistID = a.gid
+			break
+		}
+	}
+	return track
+}
+
+func releaseDate(rel *releaseRow) *string {
+	if !rel.hasDate {
+		return nil
+	}
+	m, d := rel.month, rel.day
+	if m == 0 {
+		m = 1
+	}
+	if d == 0 {
+		d = 1
+	}
+	s := fmt.Sprintf("%04d-%02d-%02d", rel.year, m, d)
+	return &s
+}
+
+func earlier(y1, m1, d1, y2, m2, d2 int) bool {
+	if y1 != y2 {
+		return y1 < y2
+	}
+	if m1 != m2 {
+		return m1 < m2
+	}
+	return d1 < d2
 }
 
 func (c *collector) albumArtist(a *artistRow) skyhook.AlbumArtistResource {
@@ -226,230 +485,7 @@ func (c *collector) albumArtist(a *artistRow) skyhook.AlbumArtistResource {
 	}
 }
 
-func (c *collector) releasesFor(rgID int) ([]skyhook.ReleaseResource, []string, error) {
-	rows, err := c.staging.db.Query(
-		`SELECT id, gid, name, status FROM s_release WHERE rg = ? ORDER BY id`, rgID)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-
-	out := []skyhook.ReleaseResource{}
-	statusSet := map[string]bool{}
-	for rows.Next() {
-		var id, status int
-		var gid, name string
-		if err := rows.Scan(&id, &gid, &name, &status); err != nil {
-			return nil, nil, err
-		}
-		if s, ok := c.statusNames[status]; ok && s != "" {
-			statusSet[s] = true
-		}
-		rel, err := c.release(id, gid, name, c.statusNames[status])
-		if err != nil {
-			return nil, nil, err
-		}
-		out = append(out, rel)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	return out, sortedKeys(statusSet), nil
-}
-
-func (c *collector) release(id int, gid, name, status string) (skyhook.ReleaseResource, error) {
-	rel := skyhook.ReleaseResource{
-		ID: gid, OldIDs: []string{}, Title: name, Status: status,
-		Country: []string{}, Label: []string{}, Media: []skyhook.MediumResource{},
-		Tracks: []skyhook.TrackResource{},
-	}
-
-	countries, date, err := c.releaseCountryAndDate(id)
-	if err != nil {
-		return rel, err
-	}
-	rel.Country = countries
-	rel.ReleaseDate = date
-
-	if rel.Label, err = c.releaseLabels(id); err != nil {
-		return rel, err
-	}
-	if err := c.releaseMedia(id, &rel); err != nil {
-		return rel, err
-	}
-	return rel, nil
-}
-
-func (c *collector) releaseCountryAndDate(id int) ([]string, *string, error) {
-	countries := []string{}
-	var y, m, d int
-	var found bool
-
-	rows, err := c.staging.db.Query(`SELECT area, y, m, d FROM s_rel_country WHERE rel = ?`, id)
-	if err != nil {
-		return nil, nil, err
-	}
-	for rows.Next() {
-		var area, ry, rm, rd int
-		if err := rows.Scan(&area, &ry, &rm, &rd); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		if code, ok := c.countryCodes[area]; ok && code != "" {
-			countries = append(countries, code)
-		}
-		// A release can appear in several countries on different dates; the
-		// earliest is the one that describes when it came out.
-		if ry > 0 && (!found || earlier(ry, rm, rd, y, m, d)) {
-			y, m, d, found = ry, rm, rd, true
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-
-	if !found {
-		// A release with no country still has a date, recorded separately.
-		row := c.staging.db.QueryRow(`SELECT y, m, d FROM s_rel_date WHERE rel = ?`, id)
-		var ry, rm, rd int
-		if err := row.Scan(&ry, &rm, &rd); err == nil && ry > 0 {
-			y, m, d, found = ry, rm, rd, true
-		} else if err != nil && err != sql.ErrNoRows {
-			return nil, nil, err
-		}
-	}
-	sort.Strings(countries)
-
-	if !found {
-		return countries, nil, nil
-	}
-	if m == 0 {
-		m = 1
-	}
-	if d == 0 {
-		d = 1
-	}
-	s := fmt.Sprintf("%04d-%02d-%02d", y, m, d)
-	return countries, &s, nil
-}
-
-func earlier(y1, m1, d1, y2, m2, d2 int) bool {
-	if y1 != y2 {
-		return y1 < y2
-	}
-	if m1 != m2 {
-		return m1 < m2
-	}
-	return d1 < d2
-}
-
-func (c *collector) releaseLabels(id int) ([]string, error) {
-	rows, err := c.staging.db.Query(`SELECT label FROM s_rel_label WHERE rel = ?`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	seen := map[string]bool{}
-	out := []string{}
-	for rows.Next() {
-		var label int
-		if err := rows.Scan(&label); err != nil {
-			return nil, err
-		}
-		if name, ok := c.labelNames[label]; ok && name != "" && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out, rows.Err()
-}
-
-func (c *collector) releaseMedia(id int, rel *skyhook.ReleaseResource) error {
-	rows, err := c.staging.db.Query(
-		`SELECT id, position, format, name, track_count FROM s_medium WHERE rel = ? ORDER BY position`, id)
-	if err != nil {
-		return err
-	}
-	type medium struct {
-		id, position, trackCount int
-		format, name             string
-	}
-	var media []medium
-	for rows.Next() {
-		var m medium
-		var format int
-		if err := rows.Scan(&m.id, &m.position, &format, &m.name, &m.trackCount); err != nil {
-			rows.Close()
-			return err
-		}
-		m.format = c.mediumFormats[format]
-		media = append(media, m)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	total := 0
-	for _, m := range media {
-		rel.Media = append(rel.Media, skyhook.MediumResource{
-			Name: m.name, Format: m.format, Position: m.position,
-		})
-		total += m.trackCount
-		if err := c.mediumTracks(m.id, m.position, rel); err != nil {
-			return err
-		}
-	}
-	rel.TrackCount = total
-	return nil
-}
-
-func (c *collector) mediumTracks(mediumID, mediumPosition int, rel *skyhook.ReleaseResource) error {
-	rows, err := c.staging.db.Query(`
-		SELECT t.gid, t.position, t.number, t.name, t.length, t.credit, r.gid
-		FROM s_track t LEFT JOIN s_recording r ON r.id = t.recording
-		WHERE t.medium = ? ORDER BY t.position`, mediumID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var gid, number, name string
-		var position, credit int
-		var length sql.NullInt64
-		var recordingGID sql.NullString
-		if err := rows.Scan(&gid, &position, &number, &name, &length, &credit, &recordingGID); err != nil {
-			return err
-		}
-
-		track := skyhook.TrackResource{
-			ID: gid, OldIDs: []string{}, OldRecordingIDs: []string{},
-			RecordingID: recordingGID.String, TrackName: name,
-			TrackNumber: number, TrackPosition: position, MediumNumber: mediumPosition,
-		}
-		if length.Valid {
-			ms := int(length.Int64)
-			track.DurationMs = &ms
-		}
-		if number == "" {
-			track.TrackNumber = fmt.Sprint(position)
-		}
-		for _, artistID := range c.creditArtists[credit] {
-			if a, ok := c.artistsByID[artistID]; ok {
-				track.ArtistID = a.gid
-				break
-			}
-		}
-		rel.Tracks = append(rel.Tracks, track)
-	}
-	return rows.Err()
-}
-
-// sortedKeys returns a set's members in a stable order, so a rebuild of the
+// sortedKeys returns a set's members in a stable order, so rebuilding the
 // same export produces byte-identical payloads.
 func sortedKeys(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
