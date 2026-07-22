@@ -1,0 +1,70 @@
+# Fixed query list for the search parity gate.
+#
+# Lidarr lowercases and trims what a user types before sending it, so these
+# are written the way they arrive at the server. Each line is one artist
+# search. Comments and blank lines are ignored.
+#
+# The list is deliberately awkward. Parity on "radiohead" proves nothing;
+# parity on a band whose name is an article, a punctuation mark, or a
+# substring of a thousand other names is the actual test.
+
+# Plain, high traffic
+radiohead
+the beatles
+pink floyd
+metallica
+taylor swift
+kendrick lamar
+
+# Names that are also common words, so ranking has to work
+air
+low
+girls
+women
+yes
+the who
+cake
+bush
+
+# Punctuation, which is search syntax in most engines
+ac/dc
+sigur ros
+maneskin
+p!nk
+!!!
+therapy?
+godspeed you! black emperor
+
+# Articles, where "the" placement decides the match
+the la's
+las
+the the
+the band
+
+# Non-Latin scripts
+宇多田ヒカル
+坂本龍一
+björk
+sigur rós
+mötley crüe
+tiësto
+
+# Classical, where the composer and performer compete
+johann sebastian bach
+glenn gould
+mozart
+yo-yo ma
+
+# Ambiguous and heavily duplicated names
+prince
+john williams
+david bowie
+nirvana
+genesis
+
+# Long tail and easily confused
+king gizzard and the lizard wizard
+the mars volta
+death grips
+boards of canada
+aphex twin
