@@ -33,6 +33,29 @@ Search runs on sqlite FTS5.
 There's no hosted public instance and no phone home, on purpose.
 The point is not being a single point of failure, so putting one in the middle would sort of defeat it.
 
+## On me being a single point of failure
+
+Yes, I see the irony.
+The whole pitch is not depending on someone else's server, and then the dataset comes from my github releases.
+
+The difference is what happens when it breaks.
+If api.lidarr.audio goes down, your lidarr stops working right then, mid import.
+If I get bored and wander off, your container keeps serving the dataset it already has, offline, basically forever.
+You just stop getting new music until you do something about it.
+That's a slower kind of broken, and honestly it's still better than the track record that made me want to build this.
+
+The builds run on github actions on a schedule, so nobody is sitting there making images by hand every few days.
+If github ever stops running them, the pipeline still exists and still works.
+
+I did think about having the container build the database itself from the musicbrainz dumps.
+I didn't, because that means every install pulling a 7gb dump a couple times a week, and metabrainz is donation funded.
+Pushing that much traffic at them felt inconsiderate when the same work can just be done once and shared.
+It would also mean your first boot takes the better part of an hour, and probably falls over entirely on a nas or a pi.
+
+But you can absolutely build it yourself if you'd rather not use my images.
+The pipeline ships in the same container, it's the same code I run.
+See [building your own dataset](docs/BUILDING.md).
+
 ## New releases, and the gap
 
 The dumps come out twice a week, so there's a window where an album exists in musicbrainz but isn't in your dataset yet.
