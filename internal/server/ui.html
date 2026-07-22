@@ -146,7 +146,7 @@
 
   /* Idle state. The console used to open on one grey sentence over an empty
      screen, which reads as a component that failed to render. */
-  .idle { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .idle { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
   .idle .panel { padding: 18px; }
   .idle h2 { margin: 0 0 14px; font-size: var(--fs-h2); font-weight: 600; }
   .facts { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
@@ -186,7 +186,7 @@
   .delta.bad { color: var(--alert); }
   .delta.flat { color: var(--muted); font-weight: 500; }
 
-  .panes { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+  .panes { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); }
   .pane { overflow: hidden; }
   .pane > h2 { margin: 0; padding: 16px 18px 2px; font-size: var(--fs-h2); font-weight: 600; }
   .pane .origin { padding: 0 18px 14px; font-size: var(--fs-small); color: var(--muted); }
@@ -227,7 +227,7 @@
   .issues { padding: 12px 18px; border-top: 1px solid var(--line); font-size: var(--fs-small); color: var(--ink); }
   .issues ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
 
-  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
   .card { padding: 18px; }
   .card h2 { margin: 0 0 14px; font-size: var(--fs-h2); font-weight: 600; }
   .stats { display: flex; gap: 32px; flex-wrap: wrap; }
@@ -236,6 +236,20 @@
     border-left: 3px solid var(--accent); background: var(--panel); box-shadow: var(--shadow);
     font-size: var(--fs-body); margin-bottom: 20px;
   }
+  .delta, .scoreboard td { white-space: nowrap; }
+
+  /* Announced but not drawn. Holds one sentence about search state, because
+     marking the whole result region live would read every row aloud. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  /* Overflow containers cannot be scrolled by keyboard unless focusable, and
+     a thousand album list is otherwise mouse only. */
+  .items:focus-visible, details pre:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: -2px;
+  }
+  button.go[aria-disabled=true] { opacity: .5; cursor: progress; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
@@ -279,15 +293,16 @@
       <label id="l-artist"><span class="lbl">Artist</span>
         <input type="text" id="artist" placeholder="Optional" autocomplete="off">
       </label>
-      <span class="check"><input type="checkbox" id="compare" checked> Compare with official service</span>
+      <label class="check" for="compare"><input type="checkbox" id="compare" checked> Compare with official service</label>
       <button type="submit" class="go" id="go">Search</button>
     </form>
-    <div id="out" aria-live="polite" aria-busy="false"></div>
+    <div id="out" aria-busy="false"></div>
   </section>
 
   <section role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
     <div id="db"></div>
   </section>
+  <p id="sr-status" role="status" aria-live="polite" class="sr-only"></p>
 </main>
 
 <script>
@@ -330,7 +345,9 @@ TABS.forEach(([tab], i) => {
 
 function syncFields() {
   const mode = $("mode").value;
-  $("f").classList.toggle("with-artist", mode === "album");
+  const withArtist = mode === "album";
+  $("f").classList.toggle("with-artist", withArtist);
+  if (!withArtist) $("artist").value = "";
   const byId = mode.endsWith("-id");
   $("query-label").textContent = byId ? "MusicBrainz ID" : "Search for";
   $("query").placeholder = byId ? "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d" : "radiohead";
@@ -397,16 +414,21 @@ function scoreboard(local, official) {
     </tbody></table>`;
 }
 
-const profileHelp = "Lidarr's default profile keeps only studio albums with an official release. "
-  + "If you changed your profile in Lidarr, your number will differ.";
+// Rendered once, referenced by every row, so the explanation reaches a
+// screen reader without repeating it on each result.
+document.body.insertAdjacentHTML("beforeend",
+  `<p id="profile-help" class="sr-only">Lidarr's default profile keeps only studio albums with an
+   official release. If you changed your profile in Lidarr, your number will differ.</p>`);
 
 function renderItems(items) {
   if (!items || !items.length) return `<p class="empty">No results</p>`;
-  return `<ul class="items">` + items.map((it) => {
+  return `<ul class="items" tabindex="0">` + items.map((it) => {
     let shown = "";
     if (it.kind === "artist" && it.hasAlbums) {
-      shown = `<span class="shown ${it.visible === 0 ? "none" : ""}" title="${esc(profileHelp)}">`
-        + `${it.visible} of ${it.albums} albums shown in Lidarr</span>`;
+      const zero = it.visible === 0;
+      shown = `<span class="tag ${zero ? "bad" : "ok"}" aria-describedby="profile-help">`
+        + `${it.visible} of ${it.albums} shown in Lidarr`
+        + (zero ? ", none will import" : "") + `</span>`;
     }
     return `<li>
       <div class="row1">
@@ -436,10 +458,11 @@ function renderPane(r, kind) {
     ${r.error ? `<p class="error">${esc(r.error)}</p>` : renderItems(r.items)}
     ${(!r.error && !r.formatOk) ? `<div class="issues">Fields Lidarr may not read correctly:
       <ul>${r.formatIssues.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>` : ""}
-    <details><summary>Raw response</summary><pre>${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
+    <details><summary>Raw response</summary><pre tabindex="0">${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
   </section>`;
 }
 
+let searching = false;
 const EXAMPLES = ["radiohead", "the beatles", "bjork", "aphex twin", "johann sebastian bach"];
 
 // Shown on load and whenever there is nothing else to show. Every self hosted
@@ -487,8 +510,11 @@ $("f").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("query").value.trim();
   if (!q) return;
-  $("go").disabled = true;
+  if (searching) return;
+  searching = true;
+  $("go").setAttribute("aria-disabled", "true");
   $("out").setAttribute("aria-busy", "true");
+  $("sr-status").textContent = "Searching";
   $("out").innerHTML = `<div class="verdict"><strong>Searching</strong>${liveLookups
     ? `<span class="stat">Live lookups are paced to one per second, so this can take a few seconds</span>` : ""}</div>`;
 
@@ -496,8 +522,15 @@ $("f").addEventListener("submit", async (e) => {
     mode: $("mode").value, query: q, artist: $("artist").value.trim(),
     compare: $("compare").checked ? "1" : "0",
   });
+  // Aborting matters here: a cold fallback lookup queues behind a one second
+  // pacer, and without a deadline a stuck queue leaves the page saying
+  // "Searching" with no way out.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 120000);
   try {
-    const d = await (await fetch("/ui/query?" + params)).json();
+    const res = await fetch("/ui/query?" + params, { signal: controller.signal });
+    if (!res.ok) throw new Error("server returned " + res.status);
+    const d = await res.json();
     let html = "";
     if (d.verdict) {
       html += `<div class="verdict ${d.verdict.status}"><strong>${esc(d.verdict.text)}</strong>`
@@ -509,10 +542,19 @@ $("f").addEventListener("submit", async (e) => {
     html += `<div class="panes">` + renderPane(d.local, "local")
       + (d.official ? renderPane(d.official, "official") : "") + `</div>`;
     $("out").innerHTML = html;
+    $("sr-status").textContent = d.verdict
+      ? d.verdict.text
+      : `Found ${d.local.count} result${d.local.count === 1 ? "" : "s"}`;
   } catch (err) {
-    $("out").innerHTML = `<section class="panel pane"><p class="error">${esc(err)}</p></section>`;
+    const msg = err.name === "AbortError"
+      ? "The search took too long and was cancelled. Try again."
+      : "The search could not be completed. " + esc(err.message || err);
+    $("out").innerHTML = `<section class="panel pane"><p class="error">${msg}</p></section>`;
+    $("sr-status").textContent = msg;
   } finally {
-    $("go").disabled = false;
+    clearTimeout(timer);
+    searching = false;
+    $("go").removeAttribute("aria-disabled");
     $("out").setAttribute("aria-busy", "false");
     refreshPill();
   }
