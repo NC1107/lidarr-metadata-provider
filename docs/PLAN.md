@@ -145,12 +145,20 @@ Artist path done 2026-07-22, measured against the real 20260718 export:
 
 **Phase 3 - search.**
 `search?type=artist|album|all` over FTS5.
-Gate: top-1 parity with the live service on a fixed query list.
+Gate: top-1 parity with the live service on a fixed query list (`cmd/parity`, `fixtures/search-queries.txt`).
 Still the real difficulty; Solr is the incumbent.
 
-**Phase 4 - package.**
+Measured 2026-07-22 on the artist dataset: **57.8% top-1, 82.2% top-5** over 45 deliberately awkward queries.
+The failures were one pattern rather than noise: bm25 relevance does not know that an exact name is what a user means, so "Yes Yes Yes" outranked "Yes" and "The THE BAND Band" outranked "The Band".
+Staged ranking (exact, then all terms, then any term) with normalised names on both sides and album count as a notability tiebreak is in; awaiting re-measurement on the rebuilt dataset.
+
+**Phase 4 - package (built 2026-07-22, gate not yet run).**
 Single container + first-boot dataset fetch + `switch.sh` (the REST PUT above, with GET-merge and revert mode).
 Gate: one week against a real Lidarr instance - add artist, monitor album, refresh, import, nothing corrupts.
+
+Built: 44.7 MB image carrying both the server and the pipeline, dataset on a volume, checksum-verified first-boot download that leaves the previous dataset in place on a bad transfer, `compose.yaml`, and `switch.sh` which refuses to repoint Lidarr at a server that is not answering.
+Automated builds land in `.github/workflows/dataset.yml`, on a cron after each MusicBrainz export, so no artifact is ever produced by hand.
+The soak test against a real Lidarr has not happened and is the gate that actually matters before anyone else uses this.
 
 **Phase 5 - ship.**
 One r/selfhosted post.
