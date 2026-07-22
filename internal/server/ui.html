@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lidarr-metadata-provider - dev console</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfd; --panel: #fff; --line: #e2e2e8; --ink: #16161a;
+    --muted: #6a6a76; --accent: #3b5bdb; --ok: #197d4a; --warn: #b3541e;
+    --err: #b02a37; --code-bg: #f5f5f8;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141417; --panel: #1c1c21; --line: #2e2e36; --ink: #ececf1;
+      --muted: #9a9aa8; --accent: #8aa2ff; --ok: #57c98c; --warn: #e0995e;
+      --err: #ff8b93; --code-bg: #17171b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    border-bottom: 1px solid var(--line); background: var(--panel);
+    padding: 14px 20px; display: flex; align-items: baseline;
+    gap: 14px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  header .meta { color: var(--muted); font-size: 12.5px; margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; }
+  header .meta b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  main { max-width: 1500px; margin: 0 auto; padding: 20px; }
+  form {
+    display: grid; gap: 10px; background: var(--panel); padding: 14px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    grid-template-columns: 190px minmax(240px, 1fr) auto auto;
+    align-items: end;
+  }
+  /* The artist filter only applies to album search. Collapsing its column
+     rather than hiding it in place keeps the row from carrying a dead gap. */
+  form.with-artist { grid-template-columns: 190px minmax(240px, 1fr) minmax(0, 260px) auto auto; }
+  form:not(.with-artist) #l-artist { display: none; }
+  @media (max-width: 900px) { form, form.with-artist { grid-template-columns: 1fr; } }
+  label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); font-weight: 500; }
+  select, input[type=text] {
+    font: inherit; padding: 8px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    min-width: 0; width: 100%;
+  }
+  input:focus-visible, select:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 7px;
+    border: 1px solid transparent; background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); white-space: nowrap; padding-bottom: 8px; }
+  .panes { display: grid; gap: 16px; margin-top: 18px; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .pane > h2 {
+    margin: 0; padding: 11px 14px; font-size: 13px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 9px; font-weight: 650;
+  }
+  .pane > h2 .took { margin-left: auto; color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
+  .tag.ok { color: var(--ok); border-color: currentColor; }
+  .tag.bad { color: var(--err); border-color: currentColor; }
+  .items { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow: auto; }
+  .items li { padding: 10px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 3px; }
+  .items li:last-child { border-bottom: 0; }
+  .row1 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .row1 strong { font-weight: 620; }
+  .row1 .disamb { color: var(--muted); font-size: 13px; }
+  .row2 { color: var(--muted); font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .kept { color: var(--ok); font-weight: 600; }
+  .kept.zero { color: var(--err); }
+  code.mbid { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .empty, .error { padding: 16px 14px; color: var(--muted); font-size: 13.5px; }
+  .error { color: var(--err); white-space: pre-wrap; }
+  details { border-top: 1px solid var(--line); }
+  details > summary { padding: 9px 14px; cursor: pointer; font-size: 12.5px; color: var(--muted); user-select: none; }
+  details pre {
+    margin: 0; padding: 12px 14px; background: var(--code-bg); overflow: auto;
+    max-height: 400px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .drift { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--warn); }
+  .drift ul { margin: 6px 0 0; padding-left: 18px; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 14px 2px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>lidarr-metadata-provider</h1>
+  <span class="tag" id="chain">chain: ...</span>
+  <div class="meta">
+    <span>queue <b id="q-waiting">0</b></span>
+    <span>requests <b id="q-reserved">0</b></span>
+    <span>next slot <b id="q-next">-</b></span>
+    <span>spacing <b id="q-interval">-</b></span>
+  </div>
+</header>
+
+<main>
+  <form id="f">
+    <label>Mode
+      <select id="mode">
+        <option value="artist">search artists</option>
+        <option value="album">search albums</option>
+        <option value="all">search all</option>
+        <option value="artist-id">artist by mbid</option>
+        <option value="album-id">album by mbid</option>
+      </select>
+    </label>
+    <label id="l-query">Query
+      <input type="text" id="query" placeholder="radiohead" autocomplete="off" autofocus>
+    </label>
+    <label id="l-artist">Artist filter
+      <input type="text" id="artist" placeholder="optional, album search only" autocomplete="off">
+    </label>
+    <span class="check"><input type="checkbox" id="compare" checked> compare upstream</span>
+    <button type="submit" id="go">Search</button>
+  </form>
+
+  <div class="panes" id="panes"></div>
+  <p class="hint">
+    "Lidarr would show N of M" applies Lidarr's stock metadata profile (studio albums, official releases)
+    to the payload, which is what a user actually sees after Lidarr filters it client-side.
+  </p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function syncFields() {
+  const mode = $("mode").value;
+  $("f").classList.toggle("with-artist", mode === "album");
+  const byId = mode.endsWith("-id");
+  $("l-query").firstChild.textContent = byId ? "MBID " : "Query ";
+  $("query").placeholder = byId ? "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d" : "radiohead";
+}
+$("mode").addEventListener("change", syncFields);
+syncFields();
+
+async function refreshStatus() {
+  try {
+    const s = await (await fetch("/ui/status")).json();
+    $("chain").textContent = "chain: " + ((s.chain && s.chain.length) ? s.chain.join(" then ") : "dataset only");
+    const l = s.limiter;
+    if (l) {
+      $("q-waiting").textContent = l.waiting;
+      $("q-reserved").textContent = l.reserved;
+      $("q-next").textContent = l.nextSlotText;
+      $("q-interval").textContent = (l.interval / 1e6).toFixed(0) + "ms";
+    } else {
+      $("q-next").textContent = "n/a";
+      $("q-interval").textContent = "no limiter";
+    }
+  } catch (e) { /* the server is down; the next tick will recover */ }
+}
+refreshStatus();
+setInterval(refreshStatus, 1000);
+
+function renderItems(items) {
+  if (!items || !items.length) return `<p class="empty">No results.</p>`;
+  return `<ul class="items">` + items.map((it) => {
+    let kept = "";
+    if (it.kind === "artist" && it.hasAlbums) {
+      const cls = it.albumsKept === 0 ? "kept zero" : "kept";
+      kept = `<span class="${cls}">Lidarr would show ${it.albumsKept} of ${it.albumsTotal}</span>`;
+    }
+    return `<li>
+      <div class="row1">
+        <strong>${esc(it.title) || "(untitled)"}</strong>
+        ${it.subtitle ? `<span class="disamb">${esc(it.subtitle)}</span>` : ""}
+        ${it.type ? `<span class="tag">${esc(it.type)}</span>` : ""}
+      </div>
+      <div class="row2">
+        <code class="mbid">${esc(it.id)}</code>
+        ${kept || (it.detail ? `<span>${esc(it.detail)}</span>` : "")}
+        ${kept && it.detail && it.kind !== "artist" ? `<span>${esc(it.detail)}</span>` : ""}
+      </div>
+    </li>`;
+  }).join("") + `</ul>`;
+}
+
+function renderPane(title, r) {
+  if (!r) return "";
+  const drifted = r.contract && r.contract.length;
+  const badge = r.error
+    ? `<span class="tag bad">error</span>`
+    : drifted ? `<span class="tag bad">contract drift</span>` : `<span class="tag ok">contract ok</span>`;
+  const count = Array.isArray(r.summary) ? r.summary.length : 0;
+  return `<section class="pane">
+    <h2>${esc(title)} ${badge} <span class="tag">${count} item${count === 1 ? "" : "s"}</span>
+      <span class="took">${esc(r.took || "")}</span></h2>
+    ${r.error ? `<p class="error">${esc(r.error)}</p>` : renderItems(r.summary)}
+    ${drifted ? `<div class="drift">Differs from the ported contract:<ul>${r.contract.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>` : ""}
+    <details><summary>raw json</summary><pre>${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
+  </section>`;
+}
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = $("query").value.trim();
+  if (!q) return;
+  $("go").disabled = true;
+  $("panes").innerHTML = `<p class="hint">Querying. A cold fallback lookup is paced at one request per second, so a large artist can take a while.</p>`;
+  const params = new URLSearchParams({
+    mode: $("mode").value, query: q, artist: $("artist").value.trim(),
+    compare: $("compare").checked ? "1" : "0",
+  });
+  try {
+    const data = await (await fetch("/ui/query?" + params)).json();
+    $("panes").innerHTML = renderPane("ours", data.ours) + renderPane("upstream (api.lidarr.audio)", data.upstream);
+  } catch (err) {
+    $("panes").innerHTML = `<section class="pane"><p class="error">${esc(err)}</p></section>`;
+  } finally {
+    $("go").disabled = false;
+    refreshStatus();
+  }
+});
+</script>
+</body>
+</html>

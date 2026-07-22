@@ -29,7 +29,12 @@ Phase 0 is done: the DTOs are ported to `internal/skyhook` and the fixture set i
 3. **Build time vs run time.**
    Anything expensive (dump parsing, enrichment, image/overview fetching, index building) belongs in the build pipeline that WE run.
    The runtime server is stateless, read-only, needs no API keys, and must survive total neglect.
-   Never add a runtime dependency on a third-party API.
+   The default configuration touches no third-party API at request time, and that default is not negotiable.
+
+   **Amended 2026-07-22 (Nick's call):** one bounded exception exists, the live MusicBrainz fallback.
+   It is off unless the operator passes `-fallback` with a `-contact`, it is only consulted for lookups the dataset misses, and when it fails the server degrades to dataset-only rather than erroring.
+   Dump-only remains the supported default so nobody is forced into a runtime dependency.
+   Do not widen this: no third-party API may become required, and none may sit on the hot path for data the dataset already has.
 
 4. **Do not become the single point of failure.**
    No hosted public instance, no phone-home, no mandatory central anything.
@@ -92,6 +97,25 @@ X-Api-Key: <key>
 ```
 
 `switch.sh` wraps this and is part of the product, not tooling.
+
+## Live fallback and MusicBrainz access
+
+The fallback is opt-in (`-fallback -contact <email or url>`) and exists to cover the days between a release appearing in MusicBrainz and appearing in a dataset artifact.
+
+Two hard-won rules when touching anything that talks to MusicBrainz:
+
+1. **Every request goes through the one shared `ratelimit.Limiter`.**
+   The documented cap is 1 request/second per source IP, and exceeding it drops 100% of requests from that IP, not just the excess.
+   The limiter reserves slots rather than checking a rate, so concurrent lookups queue instead of bursting.
+   Answering one album takes several calls (release groups and releases both paginate at 100), which is exactly why a per-request limiter would not be enough.
+
+2. **The User-Agent product token must not start with a lowercase `lidarr`.**
+   MusicBrainz answers 403 "the application you are using has not identified itself" to any such user agent, case-sensitively and prefix-anchored.
+   Verified 2026-07-22: `lidarr/0.1 ( me@example.com )` and `lidarr-anything/0.1 ( ... )` are refused; `Lidarr/0.1`, `mylidarrapp/0.1` and `LidarrMetadataProvider/0.1` are accepted.
+   Use `musicbrainz.UserAgent`, which is pinned to `LidarrMetadataProvider/<version> ( <contact> )` and guarded by a test.
+   Renaming that token to match the repository name would silently break fallback for every user.
+
+Dataset freshness is also configurable rather than fixed, because dataset downloads are the project's real bandwidth cost; see `docs/PLAN.md` section 9.
 
 ## Stack
 

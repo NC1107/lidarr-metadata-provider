@@ -174,13 +174,32 @@ Weekly is the sane steady state, twice-weekly is available if the pipeline is ch
 Users cannot re-download a multi-GB artifact twice a week, so updates have to ship as patches of changed rows keyed by MBID.
 Retrofitting that into a format designed as a monolith is painful, so the schema decision has to be made now even if delta publishing lands later.
 
-**Open decision (Nick's call): the last-mile gap.**
-Even a twice-weekly rebuild leaves up to ~3.5 days where a brand-new release is missing and a user's search returns nothing.
-Three ways to handle it:
-1. Accept and document it. Cheapest, honest, and the README already sets expectations about coverage.
-2. Daily deltas, which requires us to run a replicated MusicBrainz mirror in the build infrastructure and publish small patches. Best user experience, all the operational cost lands on us.
-3. Optional runtime fallthrough to the MusicBrainz web service on a lookup miss, off by default. This is what `rreading-glasses` does, and one lookup for one MBID sits comfortably inside the 1 req/s limit.
-   It conflicts with non-negotiable rule 3 ("never add a runtime dependency on a third-party API") as written, so taking it means amending that rule to allow a bounded, opt-in, degrades-to-nothing exception rather than quietly breaking it.
+**Decided 2026-07-22: opt-in live fallback, dump-only stays the default.**
+Rule 3 is amended in CLAUDE.md rather than quietly bent: the exception is bounded to a lookup miss, off unless the operator passes `-fallback -contact`, and degrades to dataset-only when MusicBrainz is unreachable.
+Users who want nothing leaving their machine keep exactly that, and the two modes differ by one flag.
+
+Implemented in `internal/musicbrainz` (client and mapping), `internal/ratelimit` (the shared 1 req/s gate) and `internal/source` (the chain that tries the dataset first).
+No MusicBrainz API key exists or is needed for this: the web service is open, and asks only for a contactable User-Agent, which is what `-contact` supplies.
+An access token is required only for the Live Data Feed replication packets, which is a build-pipeline concern rather than a user-facing one.
+
+Known thinness of fallback results, all deliberate:
+
+- Search hits carry no albums and no releases, because expanding them would cost one request per hit. Lidarr fetches the full entity once the user picks one, so the add flow still works.
+- No images and no overviews, because MusicBrainz carries neither. Those come from build-time enrichment.
+- A cold artist lookup costs 2+ requests and roughly a second each, so a large artist is slow. That is the correct trade: the dataset is the answer for large artists.
+
+**Dataset update cadence is configurable, not baked in.**
+The artifact download is the project's real bandwidth cost, both for the user and for whoever hosts the artifacts, so the operator chooses.
+The intended surface for Phase 4, to be implemented with the updater rather than stubbed now:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `-update` | `weekly` | `never`, `daily`, `weekly`, or a duration. `never` means the dataset only changes when the operator replaces it. |
+| `-update-window` | `random` | Spread checks across the day. MusicBrainz explicitly asks clients not to wake at a fixed hour, and the same courtesy applies to whoever serves our artifacts. |
+| `-update-mode` | `delta` | `delta` pulls only changed rows; `full` re-downloads the artifact. Delta is why the format has to support row-level patches from version one. |
+
+A user on metered bandwidth sets `-update never` and pulls a new artifact by hand.
+A user who wants freshness sets `-update daily` and pays a small delta per day.
 
 ## 6. Risks (updated)
 
