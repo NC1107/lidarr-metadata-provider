@@ -1,0 +1,22 @@
+# Go build output
+/lidarr-metadata-provider
+/probe
+*.exe
+*.test
+*.out
+
+# Dataset artifacts and anything unpacked from a MusicBrainz dump.
+# These are large, reproducible from the pipeline, and never committed.
+/data/
+/dumps/
+/dist/
+*.tar.bz2
+*.tar.zst
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# Local scratch
+/scratch/
+.env
