@@ -483,12 +483,28 @@ func (c *collector) album(g *groupRow) skyhook.ArtistAlbumResource {
 		ID:              g.gid,
 		OldIDs:          sortedUnique(g.oldIDs),
 		Title:           g.name,
-		Type:            c.primaryTypes[g.typeID],
+		Type:            c.primaryType(g.typeID),
 		SecondaryTypes:  secondary,
 		ReleaseStatuses: statuses,
 		ReleaseDate:     formatDate(g),
 		Rating:          nil,
 	}
+}
+
+// primaryType names a release group's primary type, falling back to "Other"
+// for the release groups MusicBrainz leaves untyped.
+//
+// Upstream reports those as "Other" and the empty string would be worse than
+// merely inaccurate: Lidarr matches the type against the profile's allowed
+// list, so an album typed "" is invisible to every profile including ones
+// that permit Other. Verified against the fixtures, where 75 albums across
+// five artists carry no type in the export and all of them read "Other"
+// upstream.
+func (c *collector) primaryType(id int) string {
+	if name, ok := c.primaryTypes[id]; ok && name != "" {
+		return name
+	}
+	return "Other"
 }
 
 // formatDate renders a partial MusicBrainz date the way the contract does,

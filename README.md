@@ -18,10 +18,13 @@ Next up is the pipeline that turns musicbrainz dumps into the dataset.
 
 You run one docker container, point lidarr at it, and that's pretty much the whole thing.
 
-The data comes from the musicbrainz CC0 dumps.
-Those get chewed into a compact dataset ahead of time, so the container you run never parses a dump and never calls a third party api at request time.
-On first boot it pulls a versioned dataset artifact from github releases into a volume.
+The data comes from the musicbrainz CC0 dumps, but you never touch those.
+The dumps are about 7gb and take a while to chew through, so that happens ahead of time on our machines, and what comes out is a compact dataset.
+Your container downloads that finished dataset on first boot, checks it against its checksum, and starts serving.
+So it's docker up, point lidarr at it, done. No dump download, no import step, no database to set up.
+
 After that it works offline, and it keeps working if this repo goes quiet for a year.
+Updates are the same deal, a new dataset gets pulled and verified before it replaces the old one, so a bad download leaves you on the version that was already working.
 
 The server is a single go binary with sqlite opened read only.
 Artist and album responses are precomputed json keyed by mbid, so a request is a lookup and a filter rather than assembly.

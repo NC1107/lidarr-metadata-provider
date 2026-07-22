@@ -77,10 +77,11 @@ func fakeExport(t *testing.T, which []string, tables map[string]string) string {
 }
 
 const (
-	artistGID = "ff3e88b3-7354-4f30-967c-1a61ebc8c642"
-	albumGID  = "f57d03ff-b0a5-3b73-a14c-a5ed5f8cd956"
-	liveGID   = "aaaaaaaa-0000-0000-0000-000000000001"
-	noRelGID  = "bbbbbbbb-0000-0000-0000-000000000002"
+	artistGID  = "ff3e88b3-7354-4f30-967c-1a61ebc8c642"
+	albumGID   = "f57d03ff-b0a5-3b73-a14c-a5ed5f8cd956"
+	liveGID    = "aaaaaaaa-0000-0000-0000-000000000001"
+	noRelGID   = "bbbbbbbb-0000-0000-0000-000000000002"
+	untypedGID = "cccccccc-0000-0000-0000-000000000003"
 )
 
 var coreTables = []string{
@@ -153,6 +154,10 @@ func sampleTables() map[string]string {
 				mbdump.ReleaseGroupID: "52", mbdump.ReleaseGroupGID: noRelGID,
 				mbdump.ReleaseGroupName: "Unreleased", mbdump.ReleaseGroupArtistCredit: "10",
 				mbdump.ReleaseGroupTypeID: "1"}),
+			// No primary type set, which MusicBrainz permits.
+			row(mbdump.ReleaseGroupColumns, map[int]string{
+				mbdump.ReleaseGroupID: "53", mbdump.ReleaseGroupGID: untypedGID,
+				mbdump.ReleaseGroupName: "Untyped", mbdump.ReleaseGroupArtistCredit: "10"}),
 		}, "\n"),
 		"release_group_primary_type": row(mbdump.TypeTableColumns, map[int]string{
 			mbdump.TypeTableID: "1", mbdump.TypeTableName: "Album",
@@ -332,4 +337,19 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// MusicBrainz leaves some release groups untyped. Upstream reports those as
+// "Other"; an empty string would hide them from every metadata profile,
+// including ones that allow Other.
+func TestBuildDefaultsUntypedAlbumsToOther(t *testing.T) {
+	a := buildOne(t)
+	for _, al := range a.Albums {
+		if al.Type == "" {
+			t.Fatalf("album %q has an empty Type, which no profile can match", al.Title)
+		}
+		if al.Title == "Untyped" && al.Type != "Other" {
+			t.Errorf("untyped album mapped to %q, want Other", al.Type)
+		}
+	}
 }

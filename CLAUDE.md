@@ -40,6 +40,11 @@ Phase 0 is done: the DTOs are ported to `internal/skyhook` and the fixture set i
    No hosted public instance, no phone-home, no mandatory central anything.
    The container fetches a versioned dataset artifact from GitHub Releases on first boot; after that it works offline forever.
 
+   **Users never download or process a MusicBrainz dump.** The ~7 GB export and the pipeline that reads it stay on our machines; what ships is the compact dataset the pipeline produces.
+   The end-user experience is one `docker run` plus the `metadataSource` switch, with no import step and no database setup.
+   Anything that would put dump parsing, a long first-boot import, or a database dependency on the user's box breaks that promise.
+   Every artifact download is checksum-verified before it replaces the working copy (`internal/checksum`), so a corrupt update degrades to the previous dataset rather than to a broken server.
+
 ## The verified contract (from Lidarr's `SkyHookProxy.cs`, develop, 2026-07-22)
 
 Lidarr appends `/{route}` to the configured `MetadataSource` base URL, so all routes are served at root.
