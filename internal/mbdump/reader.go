@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"strconv"
 	"strings"
@@ -177,19 +178,62 @@ func (a *Archive) ReadTables(handlers map[string]RowFunc) error {
 	return nil
 }
 
+// ParallelTools are external bzip2 decompressors tried before the standard
+// library's. bzip2 stores independently compressed blocks, so decompression
+// parallelises across cores, and the single-threaded decoder is the whole
+// bottleneck when reading a 6.9 GB export: minutes rather than a minute or
+// two. Neither tool is required, and neither changes the output.
+var ParallelTools = []string{"lbzip2", "pbzip2"}
+
+// decompress opens the archive, preferring a parallel external decompressor.
+// The returned closer must be called; for an external tool it also reaps the
+// child, which matters because callers routinely stop reading early.
+func (a *Archive) decompress() (io.Reader, func(), error) {
+	for _, tool := range ParallelTools {
+		bin, err := exec.LookPath(tool)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(bin, "-dc", a.path)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			continue
+		}
+		if err := cmd.Start(); err != nil {
+			continue
+		}
+		return bufio.NewReaderSize(stdout, 4*1024*1024), func() {
+			// Stopping early leaves the child mid-stream, so kill rather
+			// than wait for it to finish decompressing gigabytes nobody
+			// will read.
+			stdout.Close()
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+			cmd.Wait()
+		}, nil
+	}
+
+	f, err := os.Open(a.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	// A large buffer in front of bzip2 measurably reduces syscall overhead
+	// on a multi-gigabyte sequential read.
+	return bzip2.NewReader(bufio.NewReaderSize(f, 4*1024*1024)), func() { f.Close() }, nil
+}
+
 // walk streams the archive, calling fn for each entry. fn returns false to
 // stop early, which lets Info and ReadTables skip the remaining gigabytes
 // once they have what they came for.
 func (a *Archive) walk(fn func(name string, r io.Reader) (bool, error)) error {
-	f, err := os.Open(a.path)
+	stream, closeStream, err := a.decompress()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer closeStream()
 
-	// A large buffer in front of bzip2 measurably reduces syscall overhead
-	// on a multi-gigabyte sequential read.
-	tr := tar.NewReader(bzip2.NewReader(bufio.NewReaderSize(f, 4*1024*1024)))
+	tr := tar.NewReader(stream)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {

@@ -5,11 +5,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
+	"github.com/nc1107/lidarr-metadata-provider/internal/pipeline"
+	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
 )
 
 func main() {
@@ -20,16 +24,38 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) < 2 || args[0] != "inspect" {
-		fmt.Fprint(os.Stderr, `Usage: pipeline inspect <mbdump.tar.bz2>
-
-Reads an export's provenance and lists the tables it carries, without
-unpacking it. Useful for confirming a download before spending an hour
-building a dataset from it.
-`)
-		return fmt.Errorf("unknown command")
+	if len(args) < 2 {
+		return usage()
 	}
-	path := args[1]
+	switch args[0] {
+	case "inspect":
+		return inspect(args[1], args[2:])
+	case "build-artist":
+		if len(args) < 4 {
+			return usage()
+		}
+		return buildArtist(args[1], args[2], args[3:])
+	default:
+		return usage()
+	}
+}
+
+func usage() error {
+	fmt.Fprint(os.Stderr, `Usage:
+  pipeline inspect <mbdump.tar.bz2> [table]
+      Read an export's provenance and list its tables, or sample one table's
+      rows. Confirms a download before spending an hour building from it.
+
+  pipeline build-artist <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <mbid>...
+      Build artist payloads straight from the export and print them. Both
+      archives are required: the derived one carries release dates and
+      ratings. One pass over each regardless of how many MBIDs are given, so
+      ask for every artist of interest at once.
+`)
+	return fmt.Errorf("unknown command")
+}
+
+func inspect(path string, rest []string) error {
 
 	archive, err := mbdump.Open(path)
 	if err != nil {
@@ -52,8 +78,8 @@ building a dataset from it.
 	fmt.Println()
 	fmt.Printf("replication sequence: %d  (incremental updates resume here)\n", info.ReplicationSequence)
 
-	if len(args) > 2 {
-		return sample(archive, args[2])
+	if len(rest) > 0 {
+		return sample(archive, rest[0])
 	}
 
 	tables, err := archive.Tables()
@@ -114,4 +140,49 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// buildArtist builds payloads for the given MBIDs and prints them, so the
+// mapping can be checked against a golden fixture before any dataset format
+// exists to store it in.
+func buildArtist(corePath, derivedPath string, mbids []string) error {
+	core, err := mbdump.Open(corePath)
+	if err != nil {
+		return err
+	}
+	derived, err := mbdump.Open(derivedPath)
+	if err != nil {
+		return err
+	}
+	info, err := core.Info()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "export %s (schema %d, replication %d)\n",
+		info.Timestamp, info.SchemaSequence, info.ReplicationSequence)
+	fmt.Fprintf(os.Stderr, "scanning for %d artist(s), one pass over each archive...\n", len(mbids))
+
+	start := time.Now()
+	built, err := pipeline.BuildArtists(core, derived, mbids)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "built %d artist(s) in %s\n", len(built), time.Since(start).Round(time.Second))
+
+	for _, mbid := range mbids {
+		artist, ok := built[strings.ToLower(strings.TrimSpace(mbid))]
+		if !ok {
+			continue
+		}
+		kept := len(skyhook.StandardProfile.Filter(artist.Albums))
+		fmt.Fprintf(os.Stderr, "  %s: %d albums, %d pass the stock profile\n",
+			artist.ArtistName, len(artist.Albums), kept)
+
+		body, err := json.Marshal(artist)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(body))
+	}
+	return nil
 }
