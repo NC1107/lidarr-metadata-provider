@@ -136,6 +136,13 @@ Inputs settled during the Phase 0 wrap-up (2026-07-22):
 **Phase 2 - serve artist/album.**
 Gate: byte-semantic equality with fixtures via a differ (ignores key order, catches missing keys/casing/type drift).
 
+Artist path done 2026-07-22, measured against the real 20260718 export:
+
+- Dataset: 2,934,605 artists, 1.55 GB, built in 7m33s on 8 cores. Payloads are compressed JSON keyed by MBID.
+- The Beatles (1033 albums, 229 KB) serves in **4.8 ms** against 117-187 ms from the cloud service, roughly 25-40x faster. J.S. Bach (1.35 MB) serves in 23 ms against 200 ms.
+- Correctness against the golden fixture: all 1019 fixture albums present, identical 18 survivors under the stock profile, and the 26 albums with empty release statuses match the fixture exactly. Contract differ clean.
+- Album payloads are not built yet. They need releases, media, tracks and recordings, roughly 35 M track rows, which will not fit the in-memory join the artist build uses; that needs staging through SQLite. Until then `/album/{mbid}` falls through to the live fallback.
+
 **Phase 3 - search.**
 `search?type=artist|album|all` over FTS5.
 Gate: top-1 parity with the live service on a fixed query list.
