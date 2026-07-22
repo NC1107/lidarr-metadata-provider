@@ -153,18 +153,6 @@
   .kv .v { font-size: var(--fs-body); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .kv .v.big { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
 
-  .verdict {
-    margin-bottom: 14px; padding: 13px 16px; border-radius: var(--r-md);
-    border: 1px solid var(--line); border-left: 3px solid var(--muted);
-    background: var(--panel); box-shadow: var(--shadow);
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
-  }
-  .verdict.good { border-left-color: var(--ok); }
-  .verdict.warn { border-left-color: var(--warn); }
-  .verdict.bad { border-left-color: var(--alert); }
-  .verdict strong { font-size: var(--fs-h2); font-weight: 600; }
-  .verdict .stat { font-size: var(--fs-small); color: var(--muted); }
-  .verdict .stat b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 
   table.scoreboard { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   .scoreboard th, .scoreboard td { padding: 9px 14px; text-align: right; font-size: var(--fs-body); }
@@ -445,13 +433,26 @@ function renderPane(r) {
   </section>`;
 }
 
-function scoreboard(sides) {
+function scoreboard(sides, verdict) {
   const row = (label, pick, fmt) => `<tr><th scope="row">${label}</th>` +
     sides.map(([, r]) => `<td>${fmt(pick(r))}</td>`).join("") + `</tr>`;
+
+  // Whether the top results agree is the one thing worth stating outright,
+  // and it belongs beside the numbers rather than above them in a banner.
+  let match = "";
+  if (verdict) {
+    const good = verdict.status === "good";
+    match = `<tr><th scope="row">Top result</th>` +
+      `<td colspan="${sides.length}" style="text-align:left">` +
+      `<span class="tag ${good ? "ok" : verdict.status === "bad" ? "bad" : "warn"}">` +
+      `${good ? CHECK : CROSS} ${esc(verdict.text)}</span></td></tr>`;
+  }
+
   return `<table class="scoreboard panel">
     <thead><tr><th scope="col"></th>${sides.map(([, r]) =>
       `<th scope="col">${esc(r.label)}</th>`).join("")}</tr></thead>
     <tbody>
+      ${match}
       ${row("Time", (r) => r.tookMs, ms)}
       ${row("Size", (r) => r.bytes, bytes)}
       ${row("Results", (r) => r.count, (v) => v)}
@@ -518,6 +519,8 @@ $("f").addEventListener("submit", async (e) => {
   $("go").setAttribute("aria-disabled", "true");
   $("out").setAttribute("aria-busy", "true");
   $("sr-status").textContent = "Searching";
+  $("out").innerHTML = `<p class="empty">Searching${liveLookups
+    ? ", live lookups are paced to one per second" : ""}</p>`;
 
   const against = [];
   if ($("cmp-official").checked) against.push("official");
@@ -538,12 +541,7 @@ $("f").addEventListener("submit", async (e) => {
     if (d.official) sides.push(["official", d.official]);
 
     let html = "";
-    if (d.verdict) {
-      html += `<div class="verdict ${d.verdict.status}"><strong>${esc(d.verdict.text)}</strong>`
-        + (d.verdict.speed ? `<span class="stat">Speed <b>${esc(d.verdict.speed)}</b></span>` : "")
-        + (d.verdict.size ? `<span class="stat">Size <b>${esc(d.verdict.size)}</b></span>` : "") + `</div>`;
-    }
-    if (sides.length > 1) html += scoreboard(sides);
+    if (sides.length > 1) html += scoreboard(sides, d.verdict);
     html += `<div class="panes">` + sides.map(([, r]) => renderPane(r)).join("") + `</div>`;
     if (sides.length > 1) html += renderDiff(sides);
     $("out").innerHTML = html;
