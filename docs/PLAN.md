@@ -143,7 +143,44 @@ One r/selfhosted post.
 Lead with: no cloud dependency, survives api.lidarr.audio outages, large artists are fast, seconds to enable and to revert.
 
 **Phase 6 - later.**
-Enrichment depth, incremental dataset updates (make `recent/*` real using MB replication sequence numbers), hosted public instance only if ever wanted, track-first ambitions.
+Enrichment depth, hosted public instance only if ever wanted, track-first ambitions.
+Incremental dataset updates move earlier in practice; see section 9.
+
+## 9. Freshness: how new music reaches users
+
+Verified against data.metabrainz.org on 2026-07-22.
+
+**Full exports are twice weekly, Wednesday and Saturday.**
+Only the two most recent are kept online (`20260715-002120`, `20260718-002132` at time of writing), so we cannot rely on fetching an old one later.
+Each `mbdump.tar.bz2` carries its own provenance at the archive root: `TIMESTAMP` (`2026-07-18 00:21:33+00`), `REPLICATION_SEQUENCE` (`187552`), and `SCHEMA_SEQUENCE` (`31`).
+`SCHEMA_SEQUENCE` is the number our dump reader must assert against, so a MusicBrainz schema change fails the build loudly instead of silently mangling columns.
+`REPLICATION_SEQUENCE` is the join point for incremental updates.
+
+**The public replication path is dead - do not use it.**
+`data.metabrainz.org/pub/musicbrainz/data/replication/` looks like a live hourly feed and is not: every packet there is frozen at May 2015, the newest being `replication-86414.tar.bz2` dated 18-May-2015, against a current sequence of 187552.
+The `daily/` and `weekly/` subdirectories are frozen at the same date.
+The real Live Data Feed is token-gated at `https://metabrainz.org/api/musicbrainz/replication-<n>.tar.bz2?token=<TOKEN>` and answers HTTP 400 without one.
+Tokens are free from a MetaBrainz account; getting one is a prerequisite for any incremental work, so do it early rather than discovering the gate mid-Phase-6.
+
+**We can never be fresher than MusicBrainz itself.**
+An album released two days ago is only reachable if a MusicBrainz editor has already added it, which for anything outside major releases is often not the case.
+That is a hard floor no architecture choice moves, and it applies to the official cloud service too.
+
+**The staleness budget, worst case, is the sum of three lags:** MusicBrainz editor lag, plus our rebuild cadence, plus the user's update interval.
+Rebuilding on every full export puts our own contribution at 3-4 days; a monthly rebuild puts it at 30 and would make the project feel broken for anyone chasing new releases.
+Weekly is the sane steady state, twice-weekly is available if the pipeline is cheap enough to run that often.
+
+**Design consequence for Phase 1, not Phase 6:** the artifact format must be delta-friendly from the first version.
+Users cannot re-download a multi-GB artifact twice a week, so updates have to ship as patches of changed rows keyed by MBID.
+Retrofitting that into a format designed as a monolith is painful, so the schema decision has to be made now even if delta publishing lands later.
+
+**Open decision (Nick's call): the last-mile gap.**
+Even a twice-weekly rebuild leaves up to ~3.5 days where a brand-new release is missing and a user's search returns nothing.
+Three ways to handle it:
+1. Accept and document it. Cheapest, honest, and the README already sets expectations about coverage.
+2. Daily deltas, which requires us to run a replicated MusicBrainz mirror in the build infrastructure and publish small patches. Best user experience, all the operational cost lands on us.
+3. Optional runtime fallthrough to the MusicBrainz web service on a lookup miss, off by default. This is what `rreading-glasses` does, and one lookup for one MBID sits comfortably inside the 1 req/s limit.
+   It conflicts with non-negotiable rule 3 ("never add a runtime dependency on a third-party API") as written, so taking it means amending that rule to allow a bounded, opt-in, degrades-to-nothing exception rather than quietly breaking it.
 
 ## 6. Risks (updated)
 
