@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nc1107/lidarr-metadata-provider/internal/checksum"
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/pipeline"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -30,6 +32,11 @@ func run(args []string) error {
 	switch args[0] {
 	case "inspect":
 		return inspect(args[1], args[2:])
+	case "verify":
+		if len(args) < 3 {
+			return usage()
+		}
+		return verify(args[1], args[2:])
 	case "build-artist":
 		if len(args) < 4 {
 			return usage()
@@ -45,6 +52,11 @@ func usage() error {
   pipeline inspect <mbdump.tar.bz2> [table]
       Read an export's provenance and list its tables, or sample one table's
       rows. Confirms a download before spending an hour building from it.
+
+  pipeline verify <SHA256SUMS> <file>...
+      Check downloaded archives against the export's published manifest
+      before building from them. A truncated download otherwise produces a
+      dataset that is quietly missing rows.
 
   pipeline build-artist <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <mbid>...
       Build artist payloads straight from the export and print them. Both
@@ -183,6 +195,35 @@ func buildArtist(corePath, derivedPath string, mbids []string) error {
 			return err
 		}
 		fmt.Println(string(body))
+	}
+	return nil
+}
+
+// verify checks downloaded archives against the manifest MusicBrainz
+// publishes beside them.
+func verify(manifestPath string, files []string) error {
+	f, err := os.Open(manifestPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	sums, err := checksum.ParseSums(f)
+	if err != nil {
+		return err
+	}
+
+	failed := 0
+	for _, path := range files {
+		if err := checksum.VerifyAgainstManifest(path, sums); err != nil {
+			fmt.Printf("FAIL  %s\n      %v\n", filepath.Base(path), err)
+			failed++
+			continue
+		}
+		fmt.Printf("ok    %s\n", filepath.Base(path))
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d file(s) failed verification", failed, len(files))
 	}
 	return nil
 }
