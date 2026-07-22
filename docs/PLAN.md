@@ -119,7 +119,14 @@ MusicBrainz dump ingest → precomputed artist/album JSON payloads + FTS index �
 
 Inputs settled during the Phase 0 wrap-up (2026-07-22):
 
-- Source: `https://data.metabrainz.org/pub/musicbrainz/data/fullexport/<stamp>/` - `mbdump.tar.bz2` (6.9 GB) plus `mbdump-derived.tar.bz2` (482 MB) for tags/ratings, and `mbdump-cover-art-archive.tar.bz2` (156 MB) if we take CAA images. Latest stamp at time of writing: `20260718-002132`.
+- Source: `https://data.metabrainz.org/pub/musicbrainz/data/fullexport/<stamp>/`. Latest stamp at time of writing: `20260718-002132`.
+  **Both `mbdump.tar.bz2` (6.9 GB) and `mbdump-derived.tar.bz2` (482 MB) are required**, which an earlier version of this plan got wrong by listing the derived archive as optional enrichment.
+  The core archive holds the entities; the derived archive holds the computed tables, and `release_group_meta` there is the only source of an album's first release date.
+  A build from the core archive alone produces albums with no dates at all.
+  `mbdump-cover-art-archive.tar.bz2` (156 MB) remains genuinely optional, for CAA images.
+- Archives must come from the same export. The pipeline compares replication sequences and refuses a mismatch, because joining meta rows against renumbered entity IDs yields payloads carrying other albums' dates and ratings while looking perfectly valid.
+- Verify downloads against the export's `SHA256SUMS` before building.
+- Install `lbzip2` (or `pbzip2`) on any machine that runs builds. bzip2 stores independent blocks so decompression parallelises across cores, and the single-threaded decoder is the entire bottleneck on a 6.9 GB archive. The pipeline uses one automatically when present and falls back to the standard library when not.
 - Own dump reader (open question #4 above).
 - **Hard requirement from Lidarr's client-side filter: populate `ReleaseStatuses` on every skeletal album** (needs a release → release_group join). Empty means the album is invisible under every metadata profile. Full rule in CLAUDE.md, "Client-side album filtering".
 - Gate for this phase should include the profile-survivor counts in that section (Beatles 18/1019 etc.), not just payload equality - it is the number the user actually sees.
