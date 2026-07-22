@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -73,8 +74,8 @@ func (w *Writer) begin() error {
 		dst **sql.Stmt
 		sql string
 	}{
-		{&w.insertArtist, `INSERT OR REPLACE INTO artist (mbid, name, payload) VALUES (?, ?, ?)`},
-		{&w.insertAlbum, `INSERT OR REPLACE INTO album (mbid, name, payload) VALUES (?, ?, ?)`},
+		{&w.insertArtist, `INSERT OR REPLACE INTO artist (mbid, name, norm, aliases, score, payload) VALUES (?, ?, ?, ?, ?, ?)`},
+		{&w.insertAlbum, `INSERT OR REPLACE INTO album (mbid, name, norm, score, payload) VALUES (?, ?, ?, ?, ?)`},
 		{&w.insertOldID, `INSERT OR REPLACE INTO artist_alias_mbid (old_mbid, mbid) VALUES (?, ?)`},
 		{&w.insertOldAlb, `INSERT OR REPLACE INTO album_alias_mbid (old_mbid, mbid) VALUES (?, ?)`},
 	}
@@ -105,7 +106,18 @@ func (w *Writer) AddArtist(a *skyhook.ArtistResource) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.insertArtist.Exec(a.ID, a.ArtistName, blob); err != nil {
+	// Aliases are indexed too, so an artist found under a different spelling
+	// or a non-Latin name is still reachable by the one a user types.
+	aliases := make([]string, 0, len(a.ArtistAliases))
+	for _, alias := range a.ArtistAliases {
+		if n := Normalize(alias); n != "" {
+			aliases = append(aliases, n)
+		}
+	}
+	// Album count stands in for notability, which is what decides between the
+	// dozens of artists sharing a name.
+	if _, err := w.insertArtist.Exec(a.ID, a.ArtistName, Normalize(a.ArtistName),
+		strings.Join(aliases, " "), len(a.Albums), blob); err != nil {
 		return fmt.Errorf("dataset: writing artist %s: %w", a.ID, err)
 	}
 	for _, old := range a.OldIDs {
@@ -124,7 +136,7 @@ func (w *Writer) AddAlbum(a *skyhook.AlbumResource) error {
 	if err != nil {
 		return err
 	}
-	if _, err := w.insertAlbum.Exec(a.ID, a.Title, blob); err != nil {
+	if _, err := w.insertAlbum.Exec(a.ID, a.Title, Normalize(a.Title), len(a.Releases), blob); err != nil {
 		return fmt.Errorf("dataset: writing album %s: %w", a.ID, err)
 	}
 	for _, old := range a.OldIDs {
@@ -171,12 +183,15 @@ func (w *Writer) Finish(exportStamp string, replicationSeq int) error {
 		return err
 	}
 
+	if _, err := w.db.Exec(searchIndexes); err != nil {
+		return fmt.Errorf("dataset: creating name indexes: %w", err)
+	}
 	if _, err := w.db.Exec(searchSQL); err != nil {
 		return fmt.Errorf("dataset: creating search indexes: %w", err)
 	}
 	if _, err := w.db.Exec(`
-		INSERT INTO artist_fts (name, aliases, mbid) SELECT name, '', mbid FROM artist;
-		INSERT INTO album_fts (title, artist_name, mbid) SELECT name, '', mbid FROM album;
+		INSERT INTO artist_fts (name, aliases, mbid) SELECT norm, aliases, mbid FROM artist;
+		INSERT INTO album_fts (title, artist_name, mbid) SELECT norm, '', mbid FROM album;
 	`); err != nil {
 		return fmt.Errorf("dataset: populating search indexes: %w", err)
 	}

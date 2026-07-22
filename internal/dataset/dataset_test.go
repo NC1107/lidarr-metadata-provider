@@ -240,3 +240,114 @@ func TestPayloadsAreStoredCompressed(t *testing.T) {
 		t.Errorf("stored %d bytes for %d bytes of JSON, compression is not happening", len(stored), len(raw))
 	}
 }
+
+func TestNormalize(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"AC/DC", "acdc"},
+		{"P!nk", "pnk"},
+		{"The La's", "the las"},
+		{"Simon & Garfunkel", "simon and garfunkel"},
+		{"Simon and Garfunkel", "simon and garfunkel"},
+		{"  Sigur   Rós  ", "sigur rós"},
+		{"!!!", ""},
+		{"Yes", "yes"},
+	}
+	for _, c := range cases {
+		if got := Normalize(c.in); got != c.want {
+			t.Errorf("Normalize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The ranking failure that matters: someone typing an exact name gets that
+// artist, not a longer one that happens to contain it.
+func TestSearchPrefersAnExactNameOverALongerMatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dataset.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(mbid, name string, albums int) *skyhook.ArtistResource {
+		a := &skyhook.ArtistResource{
+			ID: mbid, OldIDs: []string{}, ArtistName: name, SortName: name,
+			ArtistAliases: []string{}, Genres: []string{},
+			Images: []skyhook.ImageResource{}, Links: []skyhook.LinkResource{},
+			Albums: make([]skyhook.ArtistAlbumResource, albums),
+		}
+		return a
+	}
+	// The longer name is written first so a stable ordering cannot be what
+	// makes this pass.
+	for _, a := range []*skyhook.ArtistResource{
+		mk("11111111-0000-0000-0000-000000000001", "Yes Yes Yes", 0),
+		mk("22222222-0000-0000-0000-000000000002", "Yes", 40),
+		mk("33333333-0000-0000-0000-000000000003", "Yes", 0),
+	} {
+		if err := w.AddArtist(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	got, err := r.SearchArtists(context.Background(), "yes", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("no results")
+	}
+	if got[0].ArtistName != "Yes" {
+		t.Errorf("top result %q, want the exact match", got[0].ArtistName)
+	}
+	// Between two artists named Yes, the one with a catalogue is the one
+	// people mean.
+	if got[0].ID != "22222222-0000-0000-0000-000000000002" {
+		t.Errorf("top result %s, want the artist with albums", got[0].ID)
+	}
+}
+
+// "&" and "and" are the same word to someone typing a band name.
+func TestSearchMatchesAmpersandSpelledAsAnd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dataset.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddArtist(&skyhook.ArtistResource{
+		ID: "44444444-0000-0000-0000-000000000004", OldIDs: []string{},
+		ArtistName: "King Gizzard & the Lizard Wizard", SortName: "King Gizzard",
+		ArtistAliases: []string{}, Genres: []string{},
+		Images: []skyhook.ImageResource{}, Links: []skyhook.LinkResource{},
+		Albums: []skyhook.ArtistAlbumResource{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	for _, q := range []string{
+		"king gizzard and the lizard wizard",
+		"king gizzard & the lizard wizard",
+	} {
+		got, err := r.SearchArtists(context.Background(), q, 10)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		if len(got) == 0 {
+			t.Errorf("search %q found nothing", q)
+		}
+	}
+}

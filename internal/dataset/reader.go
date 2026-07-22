@@ -152,85 +152,124 @@ func (r *Reader) payload(ctx context.Context, table, mbid string) ([]byte, error
 	return blob, row.Scan(&blob)
 }
 
-// SearchArtists runs a full text search over artist names.
+// SearchArtists finds artists by name.
+//
+// Ranking runs in stages because full text relevance alone gets the common
+// cases wrong. Someone typing a band's exact name wants that band, but bm25
+// happily puts "Yes Yes Yes" above "Yes", and MusicBrainz holds dozens of
+// artists sharing a name where only one has a catalogue. Exact matches come
+// first, ordered by notability; text relevance fills the rest.
 func (r *Reader) SearchArtists(ctx context.Context, query string, limit int) ([]skyhook.ArtistResource, error) {
-	if limit <= 0 {
-		limit = 25
-	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.payload FROM artist_fts f
-		JOIN artist a ON a.mbid = f.mbid
-		WHERE artist_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
+	blobs, err := r.searchStaged(ctx, "artist", "artist_fts", query, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []skyhook.ArtistResource{}
-	for rows.Next() {
-		var blob []byte
-		if err := rows.Scan(&blob); err != nil {
-			return nil, err
-		}
+	out := make([]skyhook.ArtistResource, 0, len(blobs))
+	for _, blob := range blobs {
 		var a skyhook.ArtistResource
 		if err := decode(blob, &a); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// SearchAlbums runs a full text search over album titles.
+// SearchAlbums finds albums by title, using the same staged ranking.
 func (r *Reader) SearchAlbums(ctx context.Context, query, artist string, limit int) ([]skyhook.AlbumResource, error) {
-	if limit <= 0 {
-		limit = 25
-	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.payload FROM album_fts f
-		JOIN album a ON a.mbid = f.mbid
-		WHERE album_fts MATCH ? ORDER BY rank LIMIT ?`, ftsQuery(query), limit)
+	blobs, err := r.searchStaged(ctx, "album", "album_fts", query, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := []skyhook.AlbumResource{}
-	for rows.Next() {
-		var blob []byte
-		if err := rows.Scan(&blob); err != nil {
-			return nil, err
-		}
+	out := make([]skyhook.AlbumResource, 0, len(blobs))
+	for _, blob := range blobs {
 		var a skyhook.AlbumResource
 		if err := decode(blob, &a); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// ftsQuery turns a user's words into an FTS5 expression.
+// searchStaged runs exact, then all-terms, then any-terms, stopping once it
+// has enough. Later stages only ever add results the earlier ones missed, so
+// a better match can never be pushed down by a worse one.
+func (r *Reader) searchStaged(ctx context.Context, table, fts, query string, limit int) ([][]byte, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	seen := map[string]bool{}
+	var out [][]byte
+
+	collect := func(rows *sql.Rows, err error) error {
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() && len(out) < limit {
+			var mbid string
+			var blob []byte
+			if err := rows.Scan(&mbid, &blob); err != nil {
+				return err
+			}
+			if seen[mbid] {
+				continue
+			}
+			seen[mbid] = true
+			out = append(out, blob)
+		}
+		return rows.Err()
+	}
+
+	if norm := Normalize(query); norm != "" {
+		err := collect(r.db.QueryContext(ctx,
+			`SELECT mbid, payload FROM `+table+` WHERE norm = ? ORDER BY score DESC LIMIT ?`,
+			norm, limit))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// All terms, then any term. The second pass matters for names joined by
+	// a word the artist spells as a symbol, where "and" cannot match "&".
+	for _, conjunction := range []string{" AND ", " OR "} {
+		if len(out) >= limit {
+			break
+		}
+		match := ftsQuery(query, conjunction)
+		if match == "" {
+			continue
+		}
+		err := collect(r.db.QueryContext(ctx, `
+			SELECT a.mbid, a.payload FROM `+fts+` f
+			JOIN `+table+` a ON a.mbid = f.mbid
+			WHERE `+fts+` MATCH ? ORDER BY rank LIMIT ?`, match, limit*4))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// ftsQuery turns a user's words into an FTS5 expression joined by
+// conjunction.
 //
 // Every term is quoted because FTS5 treats bare punctuation as syntax: a
 // search for "AC/DC" or "Where Are We Now?" would otherwise be a query error
-// rather than a search. Terms are ANDed so extra words narrow the result the
-// way someone typing them expects.
-func ftsQuery(q string) string {
-	fields := strings.Fields(strings.ToLower(q))
+// rather than a search. Normalising first means a query of pure punctuation
+// yields no terms, and an empty expression is returned so the caller can skip
+// the stage rather than send FTS5 something it rejects.
+func ftsQuery(q, conjunction string) string {
+	fields := strings.Fields(Normalize(q))
 	quoted := make([]string, 0, len(fields))
 	for _, f := range fields {
-		f = strings.ReplaceAll(f, `"`, "")
-		if f != "" {
-			quoted = append(quoted, `"`+f+`"`)
-		}
+		quoted = append(quoted, `"`+f+`"`)
 	}
 	if len(quoted) == 0 {
-		// FTS5 rejects an empty MATCH, and a query that matches nothing is
-		// the honest answer to an empty search.
-		return `"____no_such_term____"`
+		return ""
 	}
-	return strings.Join(quoted, " AND ")
+	return strings.Join(quoted, conjunction)
 }
 
 func decode(blob []byte, into any) error {

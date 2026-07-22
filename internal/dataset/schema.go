@@ -13,10 +13,15 @@
 // day one.
 package dataset
 
+import (
+	"strings"
+	"unicode"
+)
+
 // schemaVersion guards the file format, not the MusicBrainz schema. A reader
 // refuses a version it was not written against rather than misreading a
 // changed layout.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // createSQL is applied to a new dataset file.
 //
@@ -32,15 +37,27 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
+-- norm is the name with case, punctuation and "&" folded away, so an exact
+-- match can be found by lookup. Full text ranking alone puts "Yes Yes Yes"
+-- above "Yes", which is the single largest source of wrong top results.
+--
+-- score is a notability proxy used to break ties between artists sharing a
+-- name, of which MusicBrainz has a great many. Album count stands in for it:
+-- the Prince people mean has hundreds, the others have none.
 CREATE TABLE IF NOT EXISTS artist (
     mbid    TEXT PRIMARY KEY,
     name    TEXT NOT NULL,
+    norm    TEXT NOT NULL,
+    aliases TEXT NOT NULL,
+    score   INTEGER NOT NULL,
     payload BLOB NOT NULL
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS album (
     mbid    TEXT PRIMARY KEY,
     name    TEXT NOT NULL,
+    norm    TEXT NOT NULL,
+    score   INTEGER NOT NULL,
     payload BLOB NOT NULL
 ) WITHOUT ROWID;
 
@@ -57,9 +74,18 @@ CREATE TABLE IF NOT EXISTS album_alias_mbid (
 ) WITHOUT ROWID;
 `
 
+// The full text index stores normalised text, not the raw name. Indexing the
+// raw name splits "The La's" into "the", "la", "s" while a normalised query
+// asks for "las", so the two could never meet.
+//
 // searchSQL builds the full text indexes. Kept separate from createSQL
 // because a build populates the payload tables first and indexes afterwards,
 // which is markedly faster than maintaining an index during a bulk insert.
+const searchIndexes = `
+CREATE INDEX IF NOT EXISTS idx_artist_norm ON artist(norm);
+CREATE INDEX IF NOT EXISTS idx_album_norm ON album(norm);
+`
+
 const searchSQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS artist_fts USING fts5(
     name, aliases, mbid UNINDEXED, tokenize = "unicode61 remove_diacritics 2"
@@ -80,3 +106,36 @@ const (
 	MetaAlbumCount     = "album_count"
 	MetaTrackCount     = "track_count"
 )
+
+// Normalize folds a name to the form exact matching compares.
+//
+// The rules follow how people type a band name rather than how MusicBrainz
+// stores it. Case is ignored and "&" reads as "and", since nobody types the
+// symbol. Whitespace separates words, but other punctuation is dropped
+// without separating, because "The La's" and "AC/DC" are typed as words
+// rather than as "la s" and "ac dc".
+func Normalize(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	pendingSpace := false
+
+	write := func(text string) {
+		if pendingSpace && b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		pendingSpace = false
+		b.WriteString(text)
+	}
+
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			write(string(r))
+		case r == '&':
+			write("and")
+		case unicode.IsSpace(r):
+			pendingSpace = true
+		}
+	}
+	return b.String()
+}
