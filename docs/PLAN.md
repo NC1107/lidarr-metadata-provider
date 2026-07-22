@@ -239,6 +239,21 @@ If this project goes dark, existing installs keep serving forever, offline, from
 That is categorically different from `api.lidarr.audio` going down, which breaks Lidarr immediately.
 Artifacts are checksummed and content-addressed, so mirroring or seeding them elsewhere needs no cooperation from us.
 
+### 9.2 Batched for the next rebuild
+
+A full build costs about two hours, so changes that require one are collected rather than applied singly. Findings from the 20260718 build, verified against the live service and the golden fixtures:
+
+**Size.** The 18.58 GB file holds only 9.59 GB of payloads. The `album` table is 16.14 GB for 8.68 GB of data because `WITHOUT ROWID` puts whole rows in the B-tree and a ~2 KB payload spills into a 4 KB overflow page that then sits mostly empty. Reproduced in isolation: 1.92x for `WITHOUT ROWID` at 4 KB pages against **1.17x for a plain rowid table at 16 KB pages**.
+Separately, flate cannot see repetition across a large payload with its 32 KB window; zstd compresses the Pulp Fiction album 8.9x smaller than flate and the whole fixture set 2.2x. Together these should take the artifact from 18.6 GB to roughly 6 GB.
+
+**Album search misses the artist.** `album_fts` has an `artist_name` column that is populated with an empty string, so searching an artist's name returns only albums with that name in the *title*. Searching "sewerperson" returns 3 results where the official service returns 20, even though all 162 of that artist's albums are in the dataset and reachable by MBID. Populate the column.
+
+**Country is a name, not a code.** We emit `["XE"]`, `["JP"]`, `["US"]` from `iso_3166_1`; upstream emits `["Europe"]`, `["Japan"]`, `["United States"]`. Read `area.name` instead.
+
+**Album artists.** For a various-artists compilation we list the release group's credit (`["Various Artists"]`) where upstream lists the contributing artists (Al Green, Chuck Berry, Dick Dale). Upstream aggregates from the tracks.
+
+**Genres and links are still empty.** Both are extractable from tables already in the export; see section 9.
+
 **Dataset update cadence is configurable, not baked in.**
 The artifact download is the project's real bandwidth cost, both for the user and for whoever hosts the artifacts, so the operator chooses.
 The intended surface for Phase 4, to be implemented with the updater rather than stubbed now:
