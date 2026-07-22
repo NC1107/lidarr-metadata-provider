@@ -85,6 +85,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /recent/artist", s.handleRecent)
 	mux.HandleFunc("GET /recent/album", s.handleRecent)
 	mux.HandleFunc("POST /search/fingerprint", s.handleFingerprint)
+	// Browsers ask for this unprompted. Answering "nothing here" beats a 404
+	// that would otherwise show up in the logs as a failed request.
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	if s.cfg.EnableWebUI {
 		s.mountUI(mux)
@@ -92,37 +97,43 @@ func (s *Server) Handler() http.Handler {
 	return s.instrument(logRequests(s.log, mux))
 }
 
-// instrument records timing for the Lidarr routes only. Console traffic is
-// excluded so an operator refreshing the page does not distort the numbers
-// they are reading.
+// instrument records timing for the metadata routes only.
+//
+// Anything else is deliberately not counted. A browser asking for
+// /favicon.ico, or an operator refreshing the console, would otherwise land
+// in the same totals as real Lidarr traffic and make a healthy server look
+// like it is erroring on every request.
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/ui") {
+		route, tracked := routeLabel(r.URL.Path)
+		if !tracked {
 			next.ServeHTTP(w, r)
 			return
 		}
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		s.metrics.Observe(routeLabel(r.URL.Path), time.Since(start), rec.status >= 400)
+		s.metrics.Observe(route, time.Since(start), rec.status >= 400)
 	})
 }
 
-// routeLabel collapses a path to its route so per-MBID lookups aggregate
-// instead of producing one row each.
-func routeLabel(path string) string {
+// routeLabel collapses a path to the route it serves, reporting false for
+// anything that is not a metadata route. Per-MBID paths aggregate so the
+// table shows one row per route rather than one per lookup.
+func routeLabel(path string) (string, bool) {
 	switch {
 	case path == "/":
-		return "/"
+		return "/", true
+	case path == "/search" || path == "/search/fingerprint":
+		return path, true
 	case strings.HasPrefix(path, "/artist/"):
-		return "/artist/{mbid}"
+		return "/artist/{mbid}", true
 	case strings.HasPrefix(path, "/album/"):
-		return "/album/{mbid}"
+		return "/album/{mbid}", true
 	case strings.HasPrefix(path, "/recent/"):
-		return "/recent/*"
-	default:
-		return path
+		return "/recent/*", true
 	}
+	return "", false
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {

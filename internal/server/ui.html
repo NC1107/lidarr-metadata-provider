@@ -369,9 +369,13 @@ async function loadDatabase() {
   catch (e) { $("db").innerHTML = `<p class="error">${esc(e)}</p>`; return; }
 
   const ds = s.dataset || {}, m = s.metrics || {}, fb = s.fallback || {};
+  // Worded so it never reads as a setup chore. A released build downloads its
+  // database on first start, so this state means a development build, not
+  // something the operator forgot to do.
   const banner = ds.present ? "" :
-    `<div class="banner">No local database installed yet. Every request is answered by a live
-     MusicBrainz lookup, which is slower and paced at one request per second.</div>`;
+    `<div class="banner">This is a development build with no local database, so every request
+     is answered by a live MusicBrainz lookup. That is slower and paced at one request per
+     second. Released builds download their database on first start, with nothing to set up.</div>`;
 
   const counts = ds.present
     ? `<div class="stats">
