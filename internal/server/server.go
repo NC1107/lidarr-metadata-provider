@@ -28,18 +28,39 @@ type Config struct {
 	// FallbackNames lists the non-dataset sources in the chain, for the info
 	// route and the dev UI. Empty means dataset-only.
 	FallbackNames []string
-	// EnableWebUI mounts the local testing UI at /ui.
+	// EnableWebUI mounts the local console at /ui.
 	EnableWebUI bool
+	// Dataset describes the installed dataset, or its absence. The console
+	// always shows dataset age, because a user who searches for a brand new
+	// release and finds nothing needs to know whether the dataset is stale
+	// before blaming the server.
+	Dataset DatasetStatus
 	// Limiter is exposed to the dev UI so queue state is visible. May be nil.
 	Limiter *ratelimit.Limiter
 	Logger  *slog.Logger
 }
 
+// DatasetStatus describes the local dataset behind the server.
+type DatasetStatus struct {
+	Present bool   `json:"present"`
+	Version string `json:"version"`
+	// ExportTimestamp is the MusicBrainz export the dataset was built from,
+	// which is what "how fresh is this" actually means.
+	ExportTimestamp string     `json:"exportTimestamp"`
+	InstalledAt     *time.Time `json:"installedAt"`
+	NextCheck       *time.Time `json:"nextCheck"`
+	UpdateSchedule  string     `json:"updateSchedule"`
+	Artists         int64      `json:"artists"`
+	Albums          int64      `json:"albums"`
+	Tracks          int64      `json:"tracks"`
+}
+
 // Server implements the Lidarr metadata contract over a source chain.
 type Server struct {
-	src source.Source
-	cfg Config
-	log *slog.Logger
+	src     source.Source
+	cfg     Config
+	log     *slog.Logger
+	metrics *Metrics
 }
 
 // New returns a Server reading from src.
@@ -50,7 +71,7 @@ func New(src source.Source, cfg Config) *Server {
 	if cfg.Version == "" {
 		cfg.Version = "0.0.0-dev"
 	}
-	return &Server{src: src, cfg: cfg, log: cfg.Logger}
+	return &Server{src: src, cfg: cfg, log: cfg.Logger, metrics: NewMetrics()}
 }
 
 // Handler builds the route table.
@@ -68,7 +89,40 @@ func (s *Server) Handler() http.Handler {
 	if s.cfg.EnableWebUI {
 		s.mountUI(mux)
 	}
-	return logRequests(s.log, mux)
+	return s.instrument(logRequests(s.log, mux))
+}
+
+// instrument records timing for the Lidarr routes only. Console traffic is
+// excluded so an operator refreshing the page does not distort the numbers
+// they are reading.
+func (s *Server) instrument(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/ui") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		s.metrics.Observe(routeLabel(r.URL.Path), time.Since(start), rec.status >= 400)
+	})
+}
+
+// routeLabel collapses a path to its route so per-MBID lookups aggregate
+// instead of producing one row each.
+func routeLabel(path string) string {
+	switch {
+	case path == "/":
+		return "/"
+	case strings.HasPrefix(path, "/artist/"):
+		return "/artist/{mbid}"
+	case strings.HasPrefix(path, "/album/"):
+		return "/album/{mbid}"
+	case strings.HasPrefix(path, "/recent/"):
+		return "/recent/*"
+	default:
+		return path
+	}
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {

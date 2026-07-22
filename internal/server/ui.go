@@ -3,6 +3,7 @@ package server
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,10 +16,10 @@ import (
 //go:embed ui.html
 var uiPage []byte
 
-// upstreamBase is the live service the UI compares against. Comparison is the
-// point of the UI: seeing our result next to the one Lidarr would have got
-// from the cloud is faster than diffing JSON by hand.
-const upstreamBase = "https://api.lidarr.audio/api/v0.4"
+// officialBase is Lidarr's cloud metadata service, which the console queries
+// side by side with this server. Comparing against the thing users are
+// switching away from is the only way to answer "is this safe to switch to".
+const officialBase = "https://api.lidarr.audio/api/v0.4"
 
 func (s *Server) mountUI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
@@ -29,60 +30,102 @@ func (s *Server) mountUI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/status", s.handleUIStatus)
 }
 
-type uiResult struct {
-	Source   string          `json:"source"`
-	Took     string          `json:"took"`
-	Error    string          `json:"error,omitempty"`
-	Summary  []uiItem        `json:"summary"`
-	Raw      json.RawMessage `json:"raw"`
-	Contract []string        `json:"contract"`
+// sideResult is one half of a comparison: what a single server returned and
+// what it cost.
+type sideResult struct {
+	Label  string `json:"label"`
+	Origin string `json:"origin"`
+	Took   int64  `json:"tookMs"`
+	Bytes  int    `json:"bytes"`
+	Count  int    `json:"count"`
+	Error  string `json:"error,omitempty"`
+
+	// FormatOK reports whether the response carried exactly the keys, casing
+	// and types Lidarr's deserializer expects. It says nothing about whether
+	// the values are right, which is why the console words the two
+	// separately.
+	FormatOK     bool     `json:"formatOk"`
+	FormatIssues []string `json:"formatIssues"`
+
+	Items []uiItem        `json:"items"`
+	Raw   json.RawMessage `json:"raw"`
 }
 
-// uiItem is the flattened view of one result, so the page can render a
-// readable card without knowing the shape of every route.
+// uiItem is one flattened result row.
 type uiItem struct {
-	Kind        string `json:"kind"`
-	Title       string `json:"title"`
-	Subtitle    string `json:"subtitle"`
-	ID          string `json:"id"`
-	Type        string `json:"type"`
-	Detail      string `json:"detail"`
-	AlbumsTotal int    `json:"albumsTotal"`
-	AlbumsKept  int    `json:"albumsKept"`
-	HasAlbums   bool   `json:"hasAlbums"`
+	Kind     string `json:"kind"`
+	Title    string `json:"title"`
+	Subtitle string `json:"subtitle"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Detail   string `json:"detail"`
+
+	// Albums and Visible describe how many albums Lidarr would display under
+	// its default profile. Named explicitly because the number is otherwise
+	// alarming: most albums are hidden by profile settings, not missing.
+	Albums  int  `json:"albums"`
+	Visible int  `json:"visible"`
+	Hidden  bool `json:"hasAlbums"`
+
+	// Severe marks a result that would misbehave inside Lidarr regardless of
+	// how correct its JSON looks, currently an album carrying no release
+	// statuses.
+	Severe       bool   `json:"severe"`
+	SevereReason string `json:"severeReason,omitempty"`
+}
+
+// verdict is the one-line answer the console leads with.
+type verdict struct {
+	Status string `json:"status"`
+	Text   string `json:"text"`
+	Speed  string `json:"speed,omitempty"`
+	Size   string `json:"size,omitempty"`
 }
 
 func (s *Server) handleUIStatus(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
-		"chain":           s.cfg.FallbackNames,
-		"version":         s.cfg.Version,
-		"replicationDate": s.cfg.ReplicationDate,
-	}
-	if s.cfg.Limiter != nil {
-		out["limiter"] = s.cfg.Limiter.Stats()
+		"version":  s.cfg.Version,
+		"dataset":  s.cfg.Dataset,
+		"metrics":  s.metrics.Snapshot(),
+		"fallback": s.fallbackStatus(),
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleUIQuery answers a UI search against our own chain, the live upstream,
-// or both.
+func (s *Server) fallbackStatus() map[string]any {
+	out := map[string]any{
+		"enabled": len(s.cfg.FallbackNames) > 0,
+		"sources": s.cfg.FallbackNames,
+	}
+	if s.cfg.Limiter != nil {
+		stats := s.cfg.Limiter.Stats()
+		out["pacedEvery"] = stats.Interval.String()
+		out["lookups"] = stats.Reserved
+		out["queued"] = stats.Waiting
+	}
+	return out
+}
+
 func (s *Server) handleUIQuery(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	mode := q.Get("mode")
 	query := strings.ToLower(strings.TrimSpace(q.Get("query")))
 	artist := strings.ToLower(strings.TrimSpace(q.Get("artist")))
 
-	out := map[string]any{}
+	local := s.queryLocal(r, mode, query, artist)
+
+	out := map[string]any{"local": local}
 	if q.Get("compare") != "0" {
-		out["upstream"] = s.queryUpstream(r, mode, query, artist)
+		official := s.queryOfficial(r, mode, query, artist)
+		out["official"] = official
+		out["verdict"] = compare(local, official)
 	}
-	out["ours"] = s.queryOurs(r, mode, query, artist)
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (s *Server) queryOurs(r *http.Request, mode, query, artist string) uiResult {
+func (s *Server) queryLocal(r *http.Request, mode, query, artist string) sideResult {
+	res := sideResult{Label: s.sourceLabel(), Origin: s.originLabel()}
 	start := time.Now()
-	res := uiResult{Source: "ours"}
 
 	var payload any
 	var err error
@@ -98,40 +141,59 @@ func (s *Server) queryOurs(r *http.Request, mode, query, artist string) uiResult
 	case "album-id":
 		payload, err = s.src.Album(r.Context(), query)
 	default:
-		err = errUnknownMode
+		err = fmt.Errorf("pick a search type")
 	}
+	res.Took = time.Since(start).Milliseconds()
 
-	res.Took = time.Since(start).Round(time.Millisecond).String()
 	if err != nil {
 		res.Error = err.Error()
 		res.Raw = json.RawMessage("null")
 		return res
 	}
 	raw, _ := json.Marshal(payload)
-	res.Raw = raw
-	res.Summary = summarize(mode, raw)
-	res.Contract = checkContract(mode, raw)
+	res.fill(mode, raw)
 	return res
 }
 
-func (s *Server) queryUpstream(r *http.Request, mode, query, artist string) uiResult {
-	start := time.Now()
-	res := uiResult{Source: "upstream"}
-
-	var endpoint string
-	switch mode {
-	case "artist", "all":
-		v := url.Values{"type": {mode}, "query": {query}}
-		endpoint = upstreamBase + "/search?" + v.Encode()
-	case "album":
-		v := url.Values{"type": {"album"}, "query": {query}, "artist": {artist}, "includeTracks": {"1"}}
-		endpoint = upstreamBase + "/search?" + v.Encode()
-	case "artist-id":
-		endpoint = upstreamBase + "/artist/" + url.PathEscape(query)
-	case "album-id":
-		endpoint = upstreamBase + "/album/" + url.PathEscape(query)
+// sourceLabel names what answered, so the pane heading itself carries the
+// disclosure rather than making the reader hunt for it. With both a dataset
+// and fallback configured the answer can come from either, so the heading
+// stays neutral and the origin line explains.
+func (s *Server) sourceLabel() string {
+	switch {
+	case s.cfg.Dataset.Present && len(s.cfg.FallbackNames) > 0:
+		return "This server"
+	case s.cfg.Dataset.Present:
+		return "Local database"
+	case len(s.cfg.FallbackNames) > 0:
+		return "Live MusicBrainz lookup"
 	default:
-		res.Error = errUnknownMode.Error()
+		return "This server"
+	}
+}
+
+// originLabel says where an answer actually came from, which is the question
+// the console exists to make unambiguous.
+func (s *Server) originLabel() string {
+	switch {
+	case s.cfg.Dataset.Present && len(s.cfg.FallbackNames) > 0:
+		return "Local database, with live MusicBrainz lookups when something is missing"
+	case s.cfg.Dataset.Present:
+		return "Local database"
+	case len(s.cfg.FallbackNames) > 0:
+		return "Live MusicBrainz lookup, no local database installed yet"
+	default:
+		return "No data source configured"
+	}
+}
+
+func (s *Server) queryOfficial(r *http.Request, mode, query, artist string) sideResult {
+	res := sideResult{Label: "Official Lidarr service", Origin: "api.lidarr.audio, the cloud service Lidarr uses by default"}
+	start := time.Now()
+
+	endpoint, err := officialURL(mode, query, artist)
+	if err != nil {
+		res.Error = err.Error()
 		res.Raw = json.RawMessage("null")
 		return res
 	}
@@ -142,47 +204,122 @@ func (s *Server) queryUpstream(r *http.Request, mode, query, artist string) uiRe
 		res.Raw = json.RawMessage("null")
 		return res
 	}
-	req.Header.Set("User-Agent", "lidarr-metadata-provider-devui/0.1")
+	req.Header.Set("User-Agent", "LidarrMetadataProvider-console/0.1")
 
 	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 	if err != nil {
-		res.Error = err.Error()
+		res.Took = time.Since(start).Milliseconds()
+		res.Error = "could not reach the official service: " + err.Error()
 		res.Raw = json.RawMessage("null")
 		return res
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	res.Took = time.Since(start).Round(time.Millisecond).String()
-	if err != nil {
+	res.Took = time.Since(start).Milliseconds()
+
+	switch {
+	case err != nil:
 		res.Error = err.Error()
 		res.Raw = json.RawMessage("null")
-		return res
-	}
-	if resp.StatusCode != http.StatusOK {
-		res.Error = "HTTP " + resp.Status
-	}
-	if !json.Valid(body) {
-		res.Error = "upstream returned non-JSON"
+	case resp.StatusCode != http.StatusOK:
+		res.Error = "official service returned HTTP " + resp.Status
 		res.Raw = json.RawMessage("null")
-		return res
+	case !json.Valid(body):
+		res.Error = "official service returned something that is not JSON"
+		res.Raw = json.RawMessage("null")
+	default:
+		res.fill(mode, body)
 	}
-	res.Raw = body
-	res.Summary = summarize(mode, body)
-	res.Contract = checkContract(mode, body)
 	return res
 }
 
-var errUnknownMode = &modeError{}
-
-type modeError struct{}
-
-func (*modeError) Error() string {
-	return `mode must be one of "artist", "album", "all", "artist-id", "album-id"`
+func officialURL(mode, query, artist string) (string, error) {
+	switch mode {
+	case "artist", "all":
+		v := url.Values{"type": {mode}, "query": {query}}
+		return officialBase + "/search?" + v.Encode(), nil
+	case "album":
+		v := url.Values{"type": {"album"}, "query": {query}, "artist": {artist}, "includeTracks": {"1"}}
+		return officialBase + "/search?" + v.Encode(), nil
+	case "artist-id":
+		return officialBase + "/artist/" + url.PathEscape(query), nil
+	case "album-id":
+		return officialBase + "/album/" + url.PathEscape(query), nil
+	}
+	return "", fmt.Errorf("pick a search type")
 }
 
-// checkContract runs the same differ the fixture tests use, so the UI shows
-// contract drift on live data as well as on goldens.
-func checkContract(mode string, raw json.RawMessage) []string {
+// fill derives everything the console shows from a raw response body.
+func (r *sideResult) fill(mode string, raw json.RawMessage) {
+	r.Bytes = len(raw)
+	r.Raw = raw
+	r.Items = summarize(mode, raw)
+	r.Count = len(r.Items)
+	r.FormatIssues = checkFormat(mode, raw)
+	r.FormatOK = len(r.FormatIssues) == 0
+}
+
+// compare turns two results into the single answer the console leads with:
+// did this server find the same thing, and what did it cost either side.
+func compare(local, official sideResult) verdict {
+	switch {
+	case local.Error != "" && official.Error != "":
+		return verdict{Status: "error", Text: "Neither server answered"}
+	case local.Error != "":
+		return verdict{Status: "bad", Text: "This server failed, the official one answered"}
+	case official.Error != "":
+		return verdict{Status: "unknown", Text: "The official service did not answer, so there is nothing to compare against"}
+	case local.Count == 0 && official.Count == 0:
+		return verdict{Status: "unknown", Text: "Neither server found anything"}
+	case local.Count == 0:
+		return verdict{Status: "bad", Text: "This server found nothing, the official one did"}
+	case official.Count == 0:
+		return verdict{Status: "good", Text: "This server found it, the official one did not"}
+	}
+
+	v := verdict{Speed: speedText(local.Took, official.Took), Size: sizeText(local.Bytes, official.Bytes)}
+	// Top result is what Lidarr shows first and what a user picks, so
+	// agreement there matters more than the length of the list.
+	if local.Items[0].ID == official.Items[0].ID {
+		v.Status = "good"
+		v.Text = "Same top result as the official service"
+		return v
+	}
+	v.Status = "warn"
+	v.Text = fmt.Sprintf("Different top result: %q here, %q officially",
+		local.Items[0].Title, official.Items[0].Title)
+	return v
+}
+
+func speedText(local, official int64) string {
+	switch {
+	case local <= 0 || official <= 0:
+		return ""
+	case local < official:
+		return fmt.Sprintf("%.1fx faster", float64(official)/float64(local))
+	case official < local:
+		return fmt.Sprintf("%.1fx slower", float64(local)/float64(official))
+	}
+	return "same speed"
+}
+
+func sizeText(local, official int) string {
+	if local <= 0 || official <= 0 {
+		return ""
+	}
+	diff := float64(local-official) / float64(official) * 100
+	switch {
+	case diff > 5:
+		return fmt.Sprintf("%.0f%% larger", diff)
+	case diff < -5:
+		return fmt.Sprintf("%.0f%% smaller", -diff)
+	}
+	return "about the same size"
+}
+
+// checkFormat runs the contract differ, which catches keys, casing and types
+// drifting from what Lidarr's deserializer expects.
+func checkFormat(mode string, raw json.RawMessage) []string {
 	var target any
 	switch mode {
 	case "artist":
@@ -196,15 +333,15 @@ func checkContract(mode string, raw json.RawMessage) []string {
 	case "album-id":
 		target = &skyhook.AlbumResource{}
 	default:
-		return nil
+		return []string{}
 	}
 	diffs, err := skyhook.ContractDiff(raw, target)
 	if err != nil {
 		return []string{err.Error()}
 	}
-	const max = 12
+	const max = 8
 	if len(diffs) > max {
-		return append(diffs[:max], "...")
+		return append(diffs[:max], fmt.Sprintf("and %d more", len(diffs)-max))
 	}
 	if diffs == nil {
 		return []string{}
@@ -212,9 +349,6 @@ func checkContract(mode string, raw json.RawMessage) []string {
 	return diffs
 }
 
-// summarize flattens a response into display rows. It decodes leniently
-// because the point is to show whatever came back, including from upstream,
-// whose payloads we do not control.
 func summarize(mode string, raw json.RawMessage) []uiItem {
 	switch mode {
 	case "artist":
@@ -253,22 +387,27 @@ func summarize(mode string, raw json.RawMessage) []uiItem {
 func artistItems(artists []skyhook.ArtistResource) []uiItem {
 	out := make([]uiItem, 0, len(artists))
 	for _, a := range artists {
-		kept := len(skyhook.StandardProfile.Filter(a.Albums))
-		detail := "no albums in payload"
-		if len(a.Albums) > 0 {
-			detail = "Lidarr would show " + itoa(kept) + " of " + itoa(len(a.Albums))
+		item := uiItem{
+			Kind: "artist", Title: a.ArtistName, Subtitle: a.Disambiguation,
+			ID: a.ID, Type: deref(a.Type),
+			Albums: len(a.Albums), Hidden: len(a.Albums) > 0,
 		}
-		out = append(out, uiItem{
-			Kind:        "artist",
-			Title:       a.ArtistName,
-			Subtitle:    a.Disambiguation,
-			ID:          a.ID,
-			Type:        deref(a.Type),
-			Detail:      detail,
-			AlbumsTotal: len(a.Albums),
-			AlbumsKept:  kept,
-			HasAlbums:   len(a.Albums) > 0,
-		})
+		item.Visible = len(skyhook.StandardProfile.Filter(a.Albums))
+
+		// An album with no release statuses is invisible to every profile,
+		// so it is worth calling out separately from ordinary filtering.
+		blank := 0
+		for _, al := range a.Albums {
+			if len(al.ReleaseStatuses) == 0 {
+				blank++
+			}
+		}
+		if blank > 0 {
+			item.Severe = true
+			item.SevereReason = fmt.Sprintf("%s no release status, so Lidarr cannot show %s at all",
+				plural(blank, "album has", "albums have"), map[bool]string{true: "it", false: "them"}[blank == 1])
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -282,32 +421,31 @@ func albumItems(albums []skyhook.AlbumResource) []uiItem {
 		}
 		typ := al.Type
 		if len(al.SecondaryTypes) > 0 {
-			typ += " / " + strings.Join(al.SecondaryTypes, ", ")
+			typ += ", " + strings.Join(al.SecondaryTypes, ", ")
 		}
-		detail := "no release statuses"
-		if len(al.ReleaseStatuses) > 0 {
-			detail = strings.Join(al.ReleaseStatuses, ", ")
+
+		item := uiItem{
+			Kind: "album", Title: al.Title, Subtitle: strings.Join(names, ", "),
+			ID: al.ID, Type: typ, Detail: releaseDetail(al),
 		}
-		if n := len(al.Releases); n > 0 {
-			detail += " - " + itoa(n) + " release(s)"
+		if len(al.ReleaseStatuses) == 0 {
+			item.Severe = true
+			item.SevereReason = "No release status, so Lidarr cannot show this album at all"
 		}
-		out = append(out, uiItem{
-			Kind:     "album",
-			Title:    al.Title,
-			Subtitle: strings.Join(names, ", "),
-			ID:       al.ID,
-			Type:     typ,
-			Detail:   detail + dateSuffix(al.ReleaseDate),
-		})
+		out = append(out, item)
 	}
 	return out
 }
 
-func dateSuffix(d *string) string {
-	if d == nil || *d == "" {
-		return ""
+func releaseDetail(al skyhook.AlbumResource) string {
+	parts := []string{}
+	if al.ReleaseDate != nil && *al.ReleaseDate != "" {
+		parts = append(parts, *al.ReleaseDate)
 	}
-	return " - " + *d
+	if n := len(al.Releases); n > 0 {
+		parts = append(parts, plural(n, "edition", "editions"))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func deref(s *string) string {
@@ -317,24 +455,11 @@ func deref(s *string) string {
 	return *s
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// plural renders a count with the right noun form, so the console never shows
+// the "1 album(s)" shape that reads as unfinished copy.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
+	return fmt.Sprintf("%d %s", n, many)
 }

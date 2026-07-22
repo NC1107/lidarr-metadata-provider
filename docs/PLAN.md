@@ -195,6 +195,32 @@ Known thinness of fallback results, all deliberate:
 - No images and no overviews, because MusicBrainz carries neither. Those come from build-time enrichment.
 - A cold artist lookup costs 2+ requests and roughly a second each, so a large artist is slow. That is the correct trade: the dataset is the answer for large artists.
 
+### 9.1 Who builds the dataset, and why not the user's container
+
+Raised 2026-07-22: shipping a prebuilt artifact makes this project's maintainer a dependency, which sits awkwardly beside rule 4.
+It is a fair objection and the answer is three separate things, not one.
+
+**The build is automated, not hand-cranked.**
+GitHub Actions on a cron, triggered after each twice-weekly MusicBrainz export.
+Verified this fits the free tier: standard runners are free and unlimited for public repositories, `ubuntu-latest` starts with roughly 21-29 GB free (extendable to ~55 GB with a cleanup action), and the job ceiling is 6 hours.
+Our input is 7.4 GB compressed and the reader streams, so the ~40 GB expanded form never touches disk; a full-archive pass costs single-digit minutes of decompression.
+There is no scenario where a person is manually producing images every three days.
+
+**The user's container deliberately does not build its own dataset.**
+Three reasons, in order of weight:
+1. It would break the product. Processing needs CPU, RAM and disk that a Synology NAS or a Raspberry Pi does not have, and first boot would go from seconds to the better part of an hour, or fail outright.
+2. It would be inconsiderate to MetaBrainz. They are a donation-funded nonprofit; thousands of installs each pulling a 7.4 GB export twice weekly is exactly the load pattern their rate limiting and mirror documentation exists to discourage. Building once centrally and distributing the result is the polite design, not the lazy one.
+3. It wastes the work. The same deterministic transform would be recomputed by every user independently.
+
+**Self-building stays a first-class supported path.**
+The pipeline ships inside the same image, so anyone who wants zero dependence on this project can point it at a MusicBrainz export and produce their own dataset with one command.
+That is what removes the maintainer as a *hard* dependency rather than merely arguing about it.
+
+**The failure mode is soft.**
+If this project goes dark, existing installs keep serving forever, offline, from the dataset they already have; they stop getting fresher data, which is a slow degradation rather than an outage.
+That is categorically different from `api.lidarr.audio` going down, which breaks Lidarr immediately.
+Artifacts are checksummed and content-addressed, so mirroring or seeding them elsewhere needs no cooperation from us.
+
 **Dataset update cadence is configurable, not baked in.**
 The artifact download is the project's real bandwidth cost, both for the user and for whoever hosts the artifacts, so the operator chooses.
 The intended surface for Phase 4, to be implemented with the updater rather than stubbed now:

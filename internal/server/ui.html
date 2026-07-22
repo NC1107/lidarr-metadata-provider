@@ -3,20 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lidarr-metadata-provider - dev console</title>
+<title>lidarr-metadata-provider</title>
 <style>
   :root {
     color-scheme: light dark;
     --bg: #fbfbfd; --panel: #fff; --line: #e2e2e8; --ink: #16161a;
     --muted: #6a6a76; --accent: #3b5bdb; --ok: #197d4a; --warn: #b3541e;
-    --err: #b02a37; --code-bg: #f5f5f8;
-    --radius: 10px;
+    --err: #b02a37; --cloud: #5b5e79; --code-bg: #f5f5f8; --radius: 10px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #141417; --panel: #1c1c21; --line: #2e2e36; --ink: #ececf1;
       --muted: #9a9aa8; --accent: #8aa2ff; --ok: #57c98c; --warn: #e0995e;
-      --err: #ff8b93; --code-bg: #17171b;
+      --err: #ff8b93; --cloud: #b4b6dd; --code-bg: #17171b;
     }
   }
   * { box-sizing: border-box; }
@@ -26,181 +25,292 @@
   }
   header {
     border-bottom: 1px solid var(--line); background: var(--panel);
-    padding: 14px 20px; display: flex; align-items: baseline;
-    gap: 14px; flex-wrap: wrap; position: sticky; top: 0; z-index: 5;
+    padding: 12px 20px; display: flex; align-items: center; gap: 16px;
+    flex-wrap: wrap; position: sticky; top: 0; z-index: 5;
   }
   header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  header .meta { color: var(--muted); font-size: 12.5px; margin-left: auto; display: flex; gap: 14px; flex-wrap: wrap; }
-  header .meta b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+  [role=tablist] { display: flex; gap: 4px; }
+  [role=tab] {
+    font: inherit; font-size: 13.5px; font-weight: 550; padding: 6px 14px;
+    border-radius: 7px; border: 1px solid transparent; background: none;
+    color: var(--muted); cursor: pointer;
+  }
+  [role=tab][aria-selected=true] { background: var(--bg); color: var(--ink); border-color: var(--line); }
+  .live-pill { margin-left: auto; font-size: 12.5px; color: var(--muted); }
+  .live-pill b { color: var(--ink); font-weight: 600; }
   main { max-width: 1500px; margin: 0 auto; padding: 20px; }
+  [role=tabpanel][hidden] { display: none; }
+
   form {
     display: grid; gap: 10px; background: var(--panel); padding: 14px;
     border: 1px solid var(--line); border-radius: var(--radius);
-    grid-template-columns: 190px minmax(240px, 1fr) auto auto;
-    align-items: end;
+    grid-template-columns: 175px minmax(240px, 1fr) auto auto; align-items: end;
   }
-  /* The artist filter only applies to album search. Collapsing its column
-     rather than hiding it in place keeps the row from carrying a dead gap. */
-  form.with-artist { grid-template-columns: 190px minmax(240px, 1fr) minmax(0, 260px) auto auto; }
+  form.with-artist { grid-template-columns: 175px minmax(240px, 1fr) minmax(0, 240px) auto auto; }
   form:not(.with-artist) #l-artist { display: none; }
   @media (max-width: 900px) { form, form.with-artist { grid-template-columns: 1fr; } }
   label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); font-weight: 500; }
   select, input[type=text] {
-    font: inherit; padding: 8px 10px; border-radius: 7px;
+    font: inherit; padding: 8px 10px; border-radius: 7px; width: 100%; min-width: 0;
     border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-    min-width: 0; width: 100%;
   }
-  input:focus-visible, select:focus-visible, button:focus-visible {
+  input:focus-visible, select:focus-visible, button:focus-visible, [role=tab]:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 1px;
   }
-  button {
+  button.go {
     font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 7px;
     border: 1px solid transparent; background: var(--accent); color: #fff; cursor: pointer;
   }
-  button:disabled { opacity: .55; cursor: progress; }
-  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); white-space: nowrap; padding-bottom: 8px; }
-  .panes { display: grid; gap: 16px; margin-top: 18px; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
-  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-  .pane > h2 {
-    margin: 0; padding: 11px 14px; font-size: 13px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: center; gap: 9px; font-weight: 650;
+  button.go:disabled { opacity: .55; cursor: progress; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; white-space: nowrap; padding-bottom: 8px; }
+
+  .verdict {
+    margin-top: 16px; padding: 13px 16px; border-radius: var(--radius);
+    border: 1px solid var(--line); border-left-width: 4px; background: var(--panel);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
   }
-  .pane > h2 .took { margin-left: auto; color: var(--muted); font-weight: 500; font-variant-numeric: tabular-nums; }
-  .tag { font-size: 11px; padding: 2px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
+  .verdict.good { border-left-color: var(--ok); }
+  .verdict.warn { border-left-color: var(--warn); }
+  .verdict.bad  { border-left-color: var(--err); }
+  .verdict.unknown { border-left-color: var(--muted); }
+  .verdict strong { font-size: 15px; font-weight: 620; }
+  .verdict .stat { font-size: 13px; color: var(--muted); }
+  .verdict .stat b { color: var(--ink); font-weight: 600; }
+
+  table.scoreboard {
+    width: 100%; border-collapse: collapse; margin-top: 14px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  }
+  .scoreboard th, .scoreboard td { padding: 9px 14px; text-align: right; font-size: 13.5px; }
+  .scoreboard thead th { font-size: 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+  .scoreboard th[scope=row] { text-align: left; color: var(--muted); font-weight: 500; }
+  .scoreboard thead th:first-child, .scoreboard tbody th { text-align: left; }
+  .scoreboard td { font-variant-numeric: tabular-nums; }
+  .scoreboard tbody tr + tr th, .scoreboard tbody tr + tr td { border-top: 1px solid var(--line); }
+  .delta { font-weight: 650; }
+  .delta.good { color: var(--ok); }
+  .delta.bad { color: var(--err); }
+  .delta.flat { color: var(--muted); font-weight: 500; }
+
+  .panes { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+  .pane {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; border-left-width: 3px;
+  }
+  .pane.local { border-left-color: var(--accent); }
+  .pane.official { border-left-color: var(--cloud); }
+  .pane > h2 { margin: 0; padding: 11px 14px 4px; font-size: 14px; font-weight: 650; }
+  .pane .origin { padding: 0 14px 10px; font-size: 12px; color: var(--muted); }
+  .pane .bar {
+    padding: 8px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--muted);
+  }
+  .tag { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
   .tag.ok { color: var(--ok); border-color: currentColor; }
   .tag.bad { color: var(--err); border-color: currentColor; }
-  .items { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow: auto; }
+  .items { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; }
   .items li { padding: 10px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 3px; }
   .items li:last-child { border-bottom: 0; }
   .row1 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .row1 strong { font-weight: 620; }
-  .row1 .disamb { color: var(--muted); font-size: 13px; }
+  .row1 .sub { color: var(--muted); font-size: 13px; }
   .row2 { color: var(--muted); font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  .kept { color: var(--ok); font-weight: 600; }
-  .kept.zero { color: var(--err); }
+  .shown { color: var(--ok); font-weight: 600; cursor: help; }
+  .shown.none { color: var(--err); }
+  .severe { color: var(--err); font-weight: 600; }
   code.mbid { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
-  .empty, .error { padding: 16px 14px; color: var(--muted); font-size: 13.5px; }
+  .empty, .error, .placeholder { padding: 16px 14px; color: var(--muted); font-size: 13.5px; }
   .error { color: var(--err); white-space: pre-wrap; }
+  .placeholder { text-align: center; padding: 44px 20px; }
   details { border-top: 1px solid var(--line); }
   details > summary { padding: 9px 14px; cursor: pointer; font-size: 12.5px; color: var(--muted); user-select: none; }
   details pre {
-    margin: 0; padding: 12px 14px; background: var(--code-bg); overflow: auto;
-    max-height: 400px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin: 0; padding: 12px 14px; background: var(--code-bg); overflow: auto; max-height: 380px;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .drift { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--warn); }
-  .drift ul { margin: 6px 0 0; padding-left: 18px; }
-  .hint { color: var(--muted); font-size: 12.5px; margin: 14px 2px 0; }
+  .issues { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--warn); }
+  .issues ul { margin: 6px 0 0; padding-left: 18px; }
+
+  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 650; }
+  .pairs { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  .pair { display: grid; gap: 2px; }
+  .pair .k { font-size: 11.5px; color: var(--muted); font-weight: 500; }
+  .pair .v { font-size: 14px; font-variant-numeric: tabular-nums; }
+  .stats { display: flex; gap: 26px; flex-wrap: wrap; }
+  .stat-big { display: grid; gap: 2px; }
+  .stat-big .n { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .stat-big .l { font-size: 12px; color: var(--muted); }
+  .banner {
+    padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--warn);
+    color: var(--warn); font-size: 13.5px; margin-bottom: 16px;
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>lidarr-metadata-provider</h1>
-  <span class="tag" id="chain">chain: ...</span>
-  <div class="meta">
-    <span>queue <b id="q-waiting">0</b></span>
-    <span>requests <b id="q-reserved">0</b></span>
-    <span>next slot <b id="q-next">-</b></span>
-    <span>spacing <b id="q-interval">-</b></span>
+  <div role="tablist" aria-label="Views">
+    <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Search</button>
+    <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
   </div>
+  <span class="live-pill">Live lookups: <b id="live-state">...</b></span>
 </header>
 
 <main>
-  <form id="f">
-    <label>Mode
-      <select id="mode">
-        <option value="artist">search artists</option>
-        <option value="album">search albums</option>
-        <option value="all">search all</option>
-        <option value="artist-id">artist by mbid</option>
-        <option value="album-id">album by mbid</option>
-      </select>
-    </label>
-    <label id="l-query">Query
-      <input type="text" id="query" placeholder="radiohead" autocomplete="off" autofocus>
-    </label>
-    <label id="l-artist">Artist filter
-      <input type="text" id="artist" placeholder="optional, album search only" autocomplete="off">
-    </label>
-    <span class="check"><input type="checkbox" id="compare" checked> compare upstream</span>
-    <button type="submit" id="go">Search</button>
-  </form>
+  <section role="tabpanel" id="panel-search" aria-labelledby="tab-search">
+    <form id="f">
+      <label>Look up
+        <select id="mode">
+          <option value="artist">Artists</option>
+          <option value="album">Albums</option>
+          <option value="all">Everything</option>
+          <option value="artist-id">Artist by ID</option>
+          <option value="album-id">Album by ID</option>
+        </select>
+      </label>
+      <label id="l-query"><span id="query-label">Search for</span>
+        <input type="text" id="query" placeholder="radiohead" autocomplete="off" autofocus>
+      </label>
+      <label id="l-artist">Artist
+        <input type="text" id="artist" placeholder="Optional" autocomplete="off">
+      </label>
+      <span class="check"><input type="checkbox" id="compare" checked> Compare with official service</span>
+      <button type="submit" class="go" id="go">Search</button>
+    </form>
+    <div id="out">
+      <p class="placeholder">Run a search to compare this server with the official Lidarr service.</p>
+    </div>
+  </section>
 
-  <div class="panes" id="panes"></div>
-  <p class="hint">
-    "Lidarr would show N of M" applies Lidarr's stock metadata profile (studio albums, official releases)
-    to the payload, which is what a user actually sees after Lidarr filters it client-side.
-  </p>
+  <section role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
+    <div id="db"></div>
+  </section>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+function ms(v) { return v >= 1000 ? (v / 1000).toFixed(2) + " s" : Math.round(v) + " ms"; }
+function bytes(v) {
+  if (v < 1024) return v + " B";
+  if (v < 1048576) return (v / 1024).toFixed(1) + " KB";
+  return (v / 1048576).toFixed(2) + " MB";
+}
+function num(v) { return (v ?? 0).toLocaleString(); }
+
+/* Tabs */
+for (const [tab, panel] of [["tab-search", "panel-search"], ["tab-db", "panel-db"]]) {
+  $(tab).addEventListener("click", () => {
+    for (const [t, p] of [["tab-search", "panel-search"], ["tab-db", "panel-db"]]) {
+      const on = t === tab;
+      $(t).setAttribute("aria-selected", String(on));
+      $(p).hidden = !on;
+    }
+    if (panel === "panel-db") loadDatabase();
+  });
+}
+
 function syncFields() {
   const mode = $("mode").value;
   $("f").classList.toggle("with-artist", mode === "album");
   const byId = mode.endsWith("-id");
-  $("l-query").firstChild.textContent = byId ? "MBID " : "Query ";
+  $("query-label").textContent = byId ? "MusicBrainz ID" : "Search for";
   $("query").placeholder = byId ? "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d" : "radiohead";
 }
 $("mode").addEventListener("change", syncFields);
 syncFields();
 
-async function refreshStatus() {
+let liveLookups = false;
+async function refreshPill() {
   try {
     const s = await (await fetch("/ui/status")).json();
-    $("chain").textContent = "chain: " + ((s.chain && s.chain.length) ? s.chain.join(" then ") : "dataset only");
-    const l = s.limiter;
-    if (l) {
-      $("q-waiting").textContent = l.waiting;
-      $("q-reserved").textContent = l.reserved;
-      $("q-next").textContent = l.nextSlotText;
-      $("q-interval").textContent = (l.interval / 1e6).toFixed(0) + "ms";
-    } else {
-      $("q-next").textContent = "n/a";
-      $("q-interval").textContent = "no limiter";
-    }
-  } catch (e) { /* the server is down; the next tick will recover */ }
+    liveLookups = !!(s.fallback && s.fallback.enabled);
+    $("live-state").textContent = liveLookups ? "On" : "Off";
+  } catch (e) { $("live-state").textContent = "unknown"; }
 }
-refreshStatus();
-setInterval(refreshStatus, 1000);
+refreshPill();
+
+/* ---- Search ---- */
+function deltaCell(localV, officialV, betterIsLower) {
+  if (!localV || !officialV) return `<td class="delta flat">n/a</td>`;
+  const ratio = betterIsLower ? officialV / localV : localV / officialV;
+  if (ratio >= 0.95 && ratio <= 1.05) return `<td class="delta flat">about the same</td>`;
+  const better = ratio > 1;
+  const factor = better ? ratio : 1 / ratio;
+  const word = betterIsLower ? (better ? "faster" : "slower") : (better ? "larger" : "smaller");
+  return `<td class="delta ${better ? "good" : "bad"}">${factor.toFixed(1)}x ${word}</td>`;
+}
+
+function scoreboard(local, official) {
+  const failed = local.error || official.error;
+  const sizeDelta = (!local.bytes || !official.bytes) ? `<td class="delta flat">n/a</td>`
+    : (() => {
+        const ratio = official.bytes / local.bytes;
+        if (ratio >= 0.95 && ratio <= 1.05) return `<td class="delta flat">about the same</td>`;
+        const smaller = ratio > 1;
+        const f = smaller ? ratio : 1 / ratio;
+        return `<td class="delta ${smaller ? "good" : "bad"}">${f.toFixed(1)}x ${smaller ? "smaller" : "larger"}</td>`;
+      })();
+  const countDelta = local.count === official.count
+    ? `<td class="delta flat">same</td>`
+    : `<td class="delta flat">${local.count > official.count ? "+" : ""}${local.count - official.count}</td>`;
+
+  return `<table class="scoreboard">
+    <thead><tr><th scope="col"></th><th scope="col">${esc(local.label)}</th>
+      <th scope="col">${esc(official.label)}</th><th scope="col">Difference</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Response time</th><td>${ms(local.tookMs)}</td><td>${ms(official.tookMs)}</td>
+        ${failed ? `<td class="delta flat">n/a</td>` : deltaCell(local.tookMs, official.tookMs, true)}</tr>
+      <tr><th scope="row">Response size</th><td>${bytes(local.bytes)}</td><td>${bytes(official.bytes)}</td>
+        ${failed ? `<td class="delta flat">n/a</td>` : sizeDelta}</tr>
+      <tr><th scope="row">Results</th><td>${local.count}</td><td>${official.count}</td>
+        ${failed ? `<td class="delta flat">n/a</td>` : countDelta}</tr>
+    </tbody></table>`;
+}
+
+const profileHelp = "Lidarr's default profile keeps only studio albums with an official release. "
+  + "If you changed your profile in Lidarr, your number will differ.";
 
 function renderItems(items) {
-  if (!items || !items.length) return `<p class="empty">No results.</p>`;
+  if (!items || !items.length) return `<p class="empty">No results</p>`;
   return `<ul class="items">` + items.map((it) => {
-    let kept = "";
+    let shown = "";
     if (it.kind === "artist" && it.hasAlbums) {
-      const cls = it.albumsKept === 0 ? "kept zero" : "kept";
-      kept = `<span class="${cls}">Lidarr would show ${it.albumsKept} of ${it.albumsTotal}</span>`;
+      shown = `<span class="shown ${it.visible === 0 ? "none" : ""}" title="${esc(profileHelp)}">`
+        + `${it.visible} of ${it.albums} albums shown in Lidarr</span>`;
     }
     return `<li>
       <div class="row1">
         <strong>${esc(it.title) || "(untitled)"}</strong>
-        ${it.subtitle ? `<span class="disamb">${esc(it.subtitle)}</span>` : ""}
+        ${it.subtitle ? `<span class="sub">${esc(it.subtitle)}</span>` : ""}
         ${it.type ? `<span class="tag">${esc(it.type)}</span>` : ""}
       </div>
       <div class="row2">
         <code class="mbid">${esc(it.id)}</code>
-        ${kept || (it.detail ? `<span>${esc(it.detail)}</span>` : "")}
-        ${kept && it.detail && it.kind !== "artist" ? `<span>${esc(it.detail)}</span>` : ""}
+        ${shown}${it.detail ? `<span>${esc(it.detail)}</span>` : ""}
+        ${it.severe ? `<span class="severe">${esc(it.severeReason)}</span>` : ""}
       </div>
     </li>`;
   }).join("") + `</ul>`;
 }
 
-function renderPane(title, r) {
-  if (!r) return "";
-  const drifted = r.contract && r.contract.length;
-  const badge = r.error
-    ? `<span class="tag bad">error</span>`
-    : drifted ? `<span class="tag bad">contract drift</span>` : `<span class="tag ok">contract ok</span>`;
-  const count = Array.isArray(r.summary) ? r.summary.length : 0;
-  return `<section class="pane">
-    <h2>${esc(title)} ${badge} <span class="tag">${count} item${count === 1 ? "" : "s"}</span>
-      <span class="took">${esc(r.took || "")}</span></h2>
-    ${r.error ? `<p class="error">${esc(r.error)}</p>` : renderItems(r.summary)}
-    ${drifted ? `<div class="drift">Differs from the ported contract:<ul>${r.contract.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>` : ""}
-    <details><summary>raw json</summary><pre>${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
+function renderPane(r, kind) {
+  const badge = r.error ? `<span class="tag bad">Error</span>`
+    : r.formatOk ? `<span class="tag ok">Lidarr can read this</span>`
+    : `<span class="tag bad">Lidarr may reject this (${r.formatIssues.length})</span>`;
+  return `<section class="pane ${kind}">
+    <h2>${esc(r.label)}</h2>
+    <p class="origin">${esc(r.origin)}</p>
+    <div class="bar">${badge}
+      <span>${r.count} result${r.count === 1 ? "" : "s"}</span>
+      <span>${ms(r.tookMs)}</span><span>${bytes(r.bytes)}</span></div>
+    ${r.error ? `<p class="error">${esc(r.error)}</p>` : renderItems(r.items)}
+    ${(!r.error && !r.formatOk) ? `<div class="issues">Fields Lidarr may not read correctly:
+      <ul>${r.formatIssues.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>` : ""}
+    <details><summary>Raw response</summary><pre>${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
   </section>`;
 }
 
@@ -209,21 +319,104 @@ $("f").addEventListener("submit", async (e) => {
   const q = $("query").value.trim();
   if (!q) return;
   $("go").disabled = true;
-  $("panes").innerHTML = `<p class="hint">Querying. A cold fallback lookup is paced at one request per second, so a large artist can take a while.</p>`;
+  $("out").innerHTML = `<p class="placeholder">Searching${liveLookups
+    ? "<br>This can take a few seconds. Live lookups are paced to avoid overloading MusicBrainz." : ""}</p>`;
+
   const params = new URLSearchParams({
     mode: $("mode").value, query: q, artist: $("artist").value.trim(),
     compare: $("compare").checked ? "1" : "0",
   });
   try {
-    const data = await (await fetch("/ui/query?" + params)).json();
-    $("panes").innerHTML = renderPane("ours", data.ours) + renderPane("upstream (api.lidarr.audio)", data.upstream);
+    const d = await (await fetch("/ui/query?" + params)).json();
+    let html = "";
+    if (d.verdict) {
+      html += `<div class="verdict ${d.verdict.status}"><strong>${esc(d.verdict.text)}</strong>`
+        + (d.verdict.speed ? `<span class="stat">Speed <b>${esc(d.verdict.speed)}</b></span>` : "")
+        + (d.verdict.size ? `<span class="stat">Size <b>${esc(d.verdict.size)}</b></span>` : "")
+        + `</div>`;
+    }
+    if (d.official) html += scoreboard(d.local, d.official);
+    html += `<div class="panes">` + renderPane(d.local, "local")
+      + (d.official ? renderPane(d.official, "official") : "") + `</div>`;
+    $("out").innerHTML = html;
   } catch (err) {
-    $("panes").innerHTML = `<section class="pane"><p class="error">${esc(err)}</p></section>`;
+    $("out").innerHTML = `<section class="pane"><p class="error">${esc(err)}</p></section>`;
   } finally {
     $("go").disabled = false;
-    refreshStatus();
+    refreshPill();
   }
 });
+
+/* ---- Database ---- */
+function ago(iso) {
+  if (!iso) return null;
+  const days = Math.floor((Date.now() - new Date(iso)) / 86400000);
+  if (days <= 0) return "today";
+  return days === 1 ? "1 day ago" : days + " days ago";
+}
+function dateText(iso) {
+  if (!iso) return "Not recorded";
+  const d = new Date(iso);
+  const rel = ago(iso);
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
+    + (rel ? ` (${rel})` : "");
+}
+
+async function loadDatabase() {
+  $("db").innerHTML = `<p class="placeholder">Loading</p>`;
+  let s;
+  try { s = await (await fetch("/ui/status")).json(); }
+  catch (e) { $("db").innerHTML = `<p class="error">${esc(e)}</p>`; return; }
+
+  const ds = s.dataset || {}, m = s.metrics || {}, fb = s.fallback || {};
+  const banner = ds.present ? "" :
+    `<div class="banner">No local database installed yet. Every request is answered by a live
+     MusicBrainz lookup, which is slower and paced at one request per second.</div>`;
+
+  const counts = ds.present
+    ? `<div class="stats">
+        <div class="stat-big"><span class="n">${num(ds.artists)}</span><span class="l">Artists</span></div>
+        <div class="stat-big"><span class="n">${num(ds.albums)}</span><span class="l">Albums</span></div>
+        <div class="stat-big"><span class="n">${num(ds.tracks)}</span><span class="l">Tracks</span></div>
+      </div>`
+    : `<p class="empty">Counts appear once a local database is installed.</p>`;
+
+  const fallbackCard = fb.enabled
+    ? `<div class="pairs">
+        <div class="pair"><span class="k">Status</span><span class="v">On</span></div>
+        <div class="pair"><span class="k">Paced at</span><span class="v">1 request every ${esc(fb.pacedEvery || "-")}</span></div>
+        <div class="pair"><span class="k">Lookups made</span><span class="v">${num(fb.lookups)}</span></div>
+        <div class="pair"><span class="k">Waiting in queue</span><span class="v">${num(fb.queued)}</span></div>
+      </div>`
+    : `<p class="empty">Off. Every request is answered locally and nothing leaves this machine
+       while serving.</p>`;
+
+  $("db").innerHTML = banner + `<div class="cards">
+    <section class="card"><h2>Database</h2><div class="pairs">
+      <div class="pair"><span class="k">MusicBrainz snapshot</span><span class="v">${esc(ds.exportTimestamp ? dateText(ds.exportTimestamp) : "None installed")}</span></div>
+      <div class="pair"><span class="k">Installed here</span><span class="v">${esc(ds.installedAt ? dateText(ds.installedAt) : "Not installed")}</span></div>
+      <div class="pair"><span class="k">Next update check</span><span class="v">${esc(ds.nextCheck ? dateText(ds.nextCheck) : "Manual updates only")}</span></div>
+      <div class="pair"><span class="k">Server version</span><span class="v">${esc(s.version || "-")}</span></div>
+    </div></section>
+
+    <section class="card"><h2>Contents</h2>${counts}</section>
+
+    <section class="card"><h2>Live MusicBrainz lookups</h2>${fallbackCard}</section>
+
+    <section class="card"><h2>Serving</h2><div class="pairs">
+      <div class="pair"><span class="k">Requests served</span><span class="v">${num(m.requests)}</span></div>
+      <div class="pair"><span class="k">Errors</span><span class="v">${num(m.errors)}</span></div>
+      <div class="pair"><span class="k">Median response</span><span class="v">${ms(m.medianMs || 0)}</span></div>
+      <div class="pair"><span class="k">Slowest 5%</span><span class="v">${ms(m.p95Ms || 0)}</span></div>
+    </div>
+    ${(m.routes && m.routes.length) ? `<table class="scoreboard" style="margin-top:14px">
+      <thead><tr><th scope="col">Route</th><th scope="col">Requests</th><th scope="col">Average</th><th scope="col">Slowest</th></tr></thead>
+      <tbody>${m.routes.map((r) => `<tr><th scope="row"><code class="mbid">${esc(r.route)}</code></th>
+        <td>${num(r.count)}</td><td>${ms(r.averageMs)}</td><td>${ms(r.slowestMs)}</td></tr>`).join("")}</tbody>
+    </table>` : `<p class="empty">No requests served yet.</p>`}
+    </section>
+  </div>`;
+}
 </script>
 </body>
 </html>
