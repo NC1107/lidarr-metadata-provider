@@ -45,7 +45,7 @@ func BuildArtists(core, derived *mbdump.Archive, mbids []string) (map[string]*sk
 		want[strings.ToLower(strings.TrimSpace(id))] = true
 	}
 
-	c, err := scan(core, derived, want)
+	c, err := scan(core, derived, want, "")
 	if err != nil {
 		return nil, err
 	}
@@ -59,20 +59,70 @@ func BuildArtists(core, derived *mbdump.Archive, mbids []string) (map[string]*sk
 // finished payload before writing any of them would roughly double the peak
 // memory of an already heavy build.
 func BuildAllArtists(core, derived *mbdump.Archive, emit func(*skyhook.ArtistResource) error) error {
-	c, err := scan(core, derived, nil)
+	c, err := scan(core, derived, nil, "")
 	if err != nil {
 		return err
 	}
 	return c.emitAll(emit)
 }
 
+// Emitter receives the payloads a full build produces.
+type Emitter struct {
+	Artist func(*skyhook.ArtistResource) error
+	Album  func(*skyhook.AlbumResource) error
+}
+
+// BuildAll produces every artist and album payload in the export.
+//
+// stagingPath names scratch space for the release, medium and track rows that
+// album assembly joins over. It is several gigabytes and removed when the
+// build finishes.
+func BuildAll(core, derived *mbdump.Archive, stagingPath string, emit Emitter) error {
+	c, err := scan(core, derived, nil, stagingPath)
+	if err != nil {
+		return err
+	}
+	defer c.staging.close()
+
+	if err := c.staging.ready(); err != nil {
+		return err
+	}
+	if err := c.emitAlbums(emit.Album); err != nil {
+		return err
+	}
+	return c.emitAll(emit.Artist)
+}
+
+// emitAlbums assembles every album payload. Artists are emitted afterwards
+// because album assembly reads artist rows to fill in credits, so dropping
+// them first would empty the credits on every album.
+func (c *collector) emitAlbums(emit func(*skyhook.AlbumResource) error) error {
+	for _, g := range c.groups {
+		album, err := c.fullAlbum(g)
+		if err != nil {
+			return err
+		}
+		if err := emit(album); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // scan reads both archives into a collector. want limits which artists are
 // kept; nil keeps all of them.
-func scan(core, derived *mbdump.Archive, want map[string]bool) (*collector, error) {
+func scan(core, derived *mbdump.Archive, want map[string]bool, stagingPath string) (*collector, error) {
 	if err := sameExport(core, derived); err != nil {
 		return nil, err
 	}
 	c := newCollector(want)
+	if stagingPath != "" {
+		store, err := newStaging(stagingPath)
+		if err != nil {
+			return nil, err
+		}
+		c.staging = store
+	}
 	if err := core.ReadTables(c.coreHandlers()); err != nil {
 		return nil, err
 	}
@@ -170,6 +220,13 @@ type collector struct {
 	primaryTypes   map[int]string
 	secondaryTypes map[int]string
 	statusNames    map[int]string
+
+	// Album assembly only. staging is nil for an artists-only build, which
+	// skips streaming 35 million track rows to disk.
+	staging       *staging
+	mediumFormats map[int]string
+	labelNames    map[int]string
+	countryCodes  map[int]string
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -185,12 +242,15 @@ func newCollector(want map[string]bool) *collector {
 		primaryTypes:   map[int]string{},
 		secondaryTypes: map[int]string{},
 		statusNames:    map[int]string{},
+		mediumFormats:  map[int]string{},
+		labelNames:     map[int]string{},
+		countryCodes:   map[int]string{},
 	}
 }
 
 // coreHandlers reads mbdump.tar.bz2, which carries the entities themselves.
 func (c *collector) coreHandlers() map[string]mbdump.RowFunc {
-	return map[string]mbdump.RowFunc{
+	handlers := map[string]mbdump.RowFunc{
 		"artist":                            c.readArtist,
 		"artist_alias":                      c.readArtistAlias,
 		"artist_gid_redirect":               c.readArtistRedirect,
@@ -204,6 +264,13 @@ func (c *collector) coreHandlers() map[string]mbdump.RowFunc {
 		"release_group_secondary_type":      c.readTypeTable(c.secondaryTypes),
 		"release_status":                    c.readTypeTable(c.statusNames),
 	}
+	if c.staging != nil {
+		handlers["release"] = c.readReleaseStaged
+		for name, fn := range c.albumHandlers() {
+			handlers[name] = fn
+		}
+	}
+	return handlers
 }
 
 // derivedHandlers reads mbdump-derived.tar.bz2, which carries the computed

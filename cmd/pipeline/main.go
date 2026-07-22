@@ -262,16 +262,28 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 	}
 
 	start := time.Now()
-	written := 0
-	err = pipeline.BuildAllArtists(core, derived, func(a *skyhook.ArtistResource) error {
-		written++
-		// A build runs for minutes with no other output, and a silent process
-		// is indistinguishable from a hung one.
-		if written%100_000 == 0 {
-			fmt.Fprintf(os.Stderr, "  %s artists written, %s elapsed\n",
-				humanCount(written), time.Since(start).Round(time.Second))
+	artistsWritten, albumsWritten := 0, 0
+	// A build runs for tens of minutes with no other output, and a silent
+	// process is indistinguishable from a hung one.
+	progress := func(kind string, n int) {
+		if n%100_000 == 0 {
+			fmt.Fprintf(os.Stderr, "  %s %s written, %s elapsed\n",
+				humanCount(n), kind, time.Since(start).Round(time.Second))
 		}
-		return writer.AddArtist(a)
+	}
+
+	staging := outPath + ".staging"
+	err = pipeline.BuildAll(core, derived, staging, pipeline.Emitter{
+		Artist: func(a *skyhook.ArtistResource) error {
+			artistsWritten++
+			progress("artists", artistsWritten)
+			return writer.AddArtist(a)
+		},
+		Album: func(a *skyhook.AlbumResource) error {
+			albumsWritten++
+			progress("albums", albumsWritten)
+			return writer.AddAlbum(a)
+		},
 	})
 	if err != nil {
 		return err

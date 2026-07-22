@@ -85,6 +85,65 @@ const (
 	GIDRedirectColumns = 3
 	GIDRedirectGID     = 0
 	GIDRedirectNewID   = 1
+
+	// medium is a disc within a release.
+	MediumColumns    = 9
+	MediumID         = 0
+	MediumRelease    = 1
+	MediumPosition   = 2
+	MediumFormat     = 3
+	MediumName       = 4
+	MediumTrackCount = 7
+
+	// track. Position is the ordinal, Number is the printed label, and they
+	// differ on vinyl where a track is numbered "A1".
+	TrackColumns      = 12
+	TrackID           = 0
+	TrackGID          = 1
+	TrackRecording    = 2
+	TrackMedium       = 3
+	TrackPosition     = 4
+	TrackNumber       = 5
+	TrackName         = 6
+	TrackArtistCredit = 7
+	TrackLength       = 8
+
+	// recording carries the MBID the contract reports as RecordingId.
+	RecordingColumns = 9
+	RecordingID      = 0
+	RecordingGID     = 1
+
+	// release_country and release_unknown_country hold release dates and
+	// countries. The release table itself has neither, so a release's date
+	// can only be found through these two.
+	ReleaseCountryColumns = 5
+	ReleaseCountryRelease = 0
+	ReleaseCountryArea    = 1
+	ReleaseCountryYear    = 2
+	ReleaseCountryMonth   = 3
+	ReleaseCountryDay     = 4
+
+	ReleaseUnknownCountryColumns = 4
+	ReleaseUnknownCountryRelease = 0
+	ReleaseUnknownCountryYear    = 1
+	ReleaseUnknownCountryMonth   = 2
+	ReleaseUnknownCountryDay     = 3
+
+	// iso_3166_1 turns an area id into the country code the contract emits.
+	ISOColumns = 2
+	ISOArea    = 0
+	ISOCode    = 1
+
+	ReleaseLabelColumns = 5
+	ReleaseLabelRelease = 1
+	ReleaseLabelLabel   = 2
+
+	LabelColumns = 16
+	LabelID      = 0
+	LabelName    = 2
+
+	// medium_format shares the lookup table layout except for width.
+	MediumFormatColumns = 8
 )
 
 // CheckColumns verifies a row has the expected width, naming the table so a
