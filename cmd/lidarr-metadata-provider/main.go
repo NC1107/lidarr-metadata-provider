@@ -58,10 +58,14 @@ func run() error {
 
 	// The dataset source lands here in Phase 1 and goes first in the chain,
 	// so the network is only consulted for what it does not have.
+	datasetLoaded := false
 
 	if *fallback {
 		if strings.TrimSpace(*contact) == "" {
-			return errors.New("-fallback requires -contact: MusicBrainz throttles user agents that carry no way to reach the maintainer")
+			log.Error("refusing to start: -fallback needs -contact",
+				"why", "MusicBrainz blocks user agents that carry no way to reach the maintainer",
+				"fix", "-fallback -contact you@example.com")
+			return errors.New("-fallback requires -contact")
 		}
 		limiter = ratelimit.New(*interval)
 		client := musicbrainz.New(musicbrainz.UserAgent(version, *contact), limiter)
@@ -73,8 +77,23 @@ func run() error {
 			"maxPages", *maxPages)
 	}
 
-	if len(chain) == 0 {
-		return errors.New("no sources configured: this build has no dataset yet, so start it with -fallback -contact <email or url>")
+	// Refusing to start beats serving empty results. A server that answers
+	// 200 with no albums looks healthy to Lidarr and quietly empties a
+	// library, which is far worse than not coming up at all.
+	if !datasetLoaded && len(chain) == 0 {
+		log.Error("refusing to start: no metadata source available")
+		log.Error("no dataset is loaded", "reason",
+			"this build cannot load one yet, the dump-to-dataset pipeline is Phase 1 and unfinished")
+		log.Error("and live fallback is off", "reason", "-fallback was not passed")
+		log.Error("pick one", "option 1", "wait for the dataset pipeline (the intended offline setup)",
+			"option 2", "start with -fallback -contact you@example.com to answer from MusicBrainz live")
+		return errors.New("no metadata source: pass -fallback -contact <email or url>, or supply a dataset once Phase 1 lands")
+	}
+
+	if !datasetLoaded {
+		log.Warn("running without a dataset",
+			"impact", "every lookup goes to MusicBrainz over the network, paced at "+interval.String()+" per request",
+			"note", "this is a development configuration, not the intended offline setup")
 	}
 
 	srv := server.New(chain, server.Config{
