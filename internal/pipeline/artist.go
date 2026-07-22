@@ -166,6 +166,10 @@ type artistRow struct {
 	rating   *float64
 	ratings  int
 	groups   []int
+
+	// embedded caches the shape used inside album payloads, which is the
+	// same for every album this artist appears on.
+	embedded *skyhook.AlbumArtistResource
 }
 
 type groupRow struct {

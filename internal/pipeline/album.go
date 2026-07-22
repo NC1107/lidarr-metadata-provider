@@ -474,15 +474,37 @@ func earlier(y1, m1, d1, y2, m2, d2 int) bool {
 	return d1 < d2
 }
 
+// albumArtist builds the artist shape embedded in an album, and caches it.
+//
+// It deliberately does not go through the full artist payload. That version
+// carries the artist's entire album list and sorts it, so building it once
+// per album made assembly quadratic in an artist's catalogue: every one of
+// Bach's six thousand albums rebuilt and re-sorted a six thousand entry list
+// only to discard it. The embedded shape has no album list at all, and it is
+// identical for every album by the same artist, so it is computed once.
 func (c *collector) albumArtist(a *artistRow) skyhook.AlbumArtistResource {
-	full := c.artist(a)
-	return skyhook.AlbumArtistResource{
-		ID: full.ID, OldIDs: full.OldIDs, ArtistName: full.ArtistName,
-		SortName: full.SortName, ArtistAliases: full.ArtistAliases,
-		Disambiguation: full.Disambiguation, Overview: full.Overview,
-		Type: full.Type, Status: full.Status, Genres: full.Genres,
-		Images: full.Images, Links: full.Links, Rating: full.Rating,
+	if a.embedded != nil {
+		return *a.embedded
 	}
+	out := skyhook.AlbumArtistResource{
+		ID:             a.gid,
+		OldIDs:         sortedUnique(a.oldIDs),
+		ArtistName:     a.name,
+		SortName:       a.sortName,
+		ArtistAliases:  sortedUnique(a.aliases),
+		Disambiguation: a.comment,
+		Overview:       nil,
+		Status:         statusFor(a.ended),
+		Genres:         []string{},
+		Images:         []skyhook.ImageResource{},
+		Links:          []skyhook.LinkResource{},
+		Rating:         skyhook.RatingResource{Count: a.ratings, Value: a.rating},
+	}
+	if name, ok := c.artistTypes[a.typeID]; ok && name != "" {
+		out.Type = &name
+	}
+	a.embedded = &out
+	return out
 }
 
 // sortedKeys returns a set's members in a stable order, so rebuilding the
