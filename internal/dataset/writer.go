@@ -248,7 +248,7 @@ func (w *Writer) SetDictionary(dict []byte) error {
 	if len(dict) == 0 {
 		return nil
 	}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderDict(dict))
 	if err != nil {
 		return err
 	}
@@ -339,7 +339,7 @@ func NewParallel(w *Writer, workers int) *Parallel {
 			defer wg.Done()
 			// Each worker owns an encoder; sharing one would serialise them
 			// again on its internal state.
-			opts := []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedBestCompression)}
+			opts := []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedDefault)}
 			if p.w.dict != nil {
 				opts = append(opts, zstd.WithEncoderDict(p.w.dict))
 			}
