@@ -15,7 +15,7 @@ import (
 func (c *collector) albumHandlers() map[string]mbdump.RowFunc {
 	return map[string]mbdump.RowFunc{
 		"medium":                  c.readMedium,
-		"medium_format":           c.readTypeTable(c.mediumFormats),
+		"medium_format":           c.readTypeTable("medium_format", mbdump.MediumFormatColumns, c.mediumFormats),
 		"track":                   c.readTrack,
 		"recording":               c.readRecording,
 		"release_label":           c.readReleaseLabel,

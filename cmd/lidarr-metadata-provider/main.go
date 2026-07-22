@@ -40,8 +40,10 @@ func run() error {
 	var (
 		addr        = flag.String("addr", ":5001", "address to listen on")
 		datasetPath = flag.String("dataset", "", "path to the dataset file to serve from")
-		web         = flag.Bool("web", false, "mount the local dev console at /ui")
-		fallback    = flag.Bool("fallback", false,
+		datasetURL  = flag.String("dataset-url", envOr("LMP_DATASET_URL", ""),
+			"download the dataset from here when the file is absent, verifying it before use")
+		web      = flag.Bool("web", false, "mount the local dev console at /ui")
+		fallback = flag.Bool("fallback", false,
 			"query MusicBrainz live for lookups the dataset does not have (off by default; requires -contact)")
 		contact = flag.String("contact", "",
 			"contact URL or email identifying this instance to MusicBrainz, required by -fallback")
@@ -62,6 +64,22 @@ func run() error {
 	// The dataset goes first so the network is only consulted for what it
 	// does not already have.
 	if *datasetPath != "" {
+		if *datasetURL != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+			err := dataset.Fetch(ctx, *datasetURL, *datasetPath, log)
+			cancel()
+			if err != nil {
+				log.Error("refusing to start: the dataset could not be downloaded", "err", err)
+				return err
+			}
+		}
+		if _, err := os.Stat(*datasetPath); os.IsNotExist(err) {
+			log.Error("refusing to start: no dataset at that path", "path", *datasetPath)
+			log.Error("get one", "option 1", "-dataset-url <url> to download it automatically",
+				"option 2", "build your own, see docs/BUILDING.md",
+				"option 3", "-fallback -contact you@example.com to run without a dataset")
+			return fmt.Errorf("no dataset at %s", *datasetPath)
+		}
 		reader, err := dataset.Open(*datasetPath)
 		if err != nil {
 			log.Error("refusing to start: the dataset could not be opened",
@@ -170,6 +188,15 @@ func fallbackNames(chain source.Chain) []string {
 		}
 	}
 	return out
+}
+
+// envOr lets the container be configured without rewriting its command,
+// which is how compose files and orchestrators expect to pass settings.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func consoleURL(addr string) string {

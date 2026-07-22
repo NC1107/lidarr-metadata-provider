@@ -24,7 +24,8 @@ func albumTables() map[string]string {
 			mbdump.MediumFormat: "1", mbdump.MediumName: "Bonus", mbdump.MediumTrackCount: "1"}),
 	}, "\n")
 
-	t["medium_format"] = row(mbdump.TypeTableColumns, map[int]string{
+	// medium_format is wider than the other lookup tables.
+	t["medium_format"] = row(mbdump.MediumFormatColumns, map[int]string{
 		mbdump.TypeTableID: "1", mbdump.TypeTableName: "CD"})
 
 	t["track"] = strings.Join([]string{

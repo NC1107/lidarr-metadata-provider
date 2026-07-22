@@ -255,14 +255,14 @@ func (c *collector) coreHandlers() map[string]mbdump.RowFunc {
 		"artist_alias":                      c.readArtistAlias,
 		"artist_gid_redirect":               c.readArtistRedirect,
 		"artist_credit_name":                c.readArtistCreditName,
-		"artist_type":                       c.readTypeTable(c.artistTypes),
+		"artist_type":                       c.readTypeTable("artist_type", mbdump.TypeTableColumns, c.artistTypes),
 		"release":                           c.readRelease,
 		"release_group":                     c.readReleaseGroup,
 		"release_group_gid_redirect":        c.readReleaseGroupRedirect,
 		"release_group_secondary_type_join": c.readSecondaryTypeJoin,
-		"release_group_primary_type":        c.readTypeTable(c.primaryTypes),
-		"release_group_secondary_type":      c.readTypeTable(c.secondaryTypes),
-		"release_status":                    c.readTypeTable(c.statusNames),
+		"release_group_primary_type":        c.readTypeTable("release_group_primary_type", mbdump.TypeTableColumns, c.primaryTypes),
+		"release_group_secondary_type":      c.readTypeTable("release_group_secondary_type", mbdump.TypeTableColumns, c.secondaryTypes),
+		"release_status":                    c.readTypeTable("release_status", mbdump.TypeTableColumns, c.statusNames),
 	}
 	if c.staging != nil {
 		handlers["release"] = c.readReleaseStaged
@@ -282,9 +282,13 @@ func (c *collector) derivedHandlers() map[string]mbdump.RowFunc {
 	}
 }
 
-func (c *collector) readTypeTable(into map[int]string) mbdump.RowFunc {
+// readTypeTable reads an id-to-name lookup table. The width is passed in
+// rather than assumed: most lookup tables share a six column layout but
+// medium_format carries two extra, and asserting the wrong width is how a
+// build ends up reading a name out of the wrong column.
+func (c *collector) readTypeTable(name string, columns int, into map[int]string) mbdump.RowFunc {
 	return func(row []mbdump.Field) error {
-		if err := mbdump.CheckColumns("type table", row, mbdump.TypeTableColumns); err != nil {
+		if err := mbdump.CheckColumns(name, row, columns); err != nil {
 			return err
 		}
 		id, err := atoi(row[mbdump.TypeTableID])

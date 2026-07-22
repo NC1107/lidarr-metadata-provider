@@ -1,0 +1,25 @@
+# Minimal setup: run the metadata server, then point Lidarr at it with
+# ./switch.sh --lidarr http://lidarr:8686 --api-key <key> --to http://metadata:5001/
+services:
+  metadata:
+    image: ghcr.io/nc1107/lidarr-metadata-provider:latest
+    container_name: lidarr-metadata-provider
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      # The dataset lives here and survives image updates.
+      - lidarr-metadata:/data
+    # Uncomment to add live MusicBrainz lookups for releases too new to be in
+    # the dataset. Off by default: it is the only thing here that touches the
+    # network while serving. The contact identifies your instance to
+    # MusicBrainz and is required by them, not by us.
+    #
+    # command: >
+    #   -addr :5001
+    #   -dataset /data/dataset.db
+    #   -fallback
+    #   -contact you@example.com
+
+volumes:
+  lidarr-metadata:
