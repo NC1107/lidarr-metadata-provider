@@ -8,13 +8,9 @@ It is the same pipeline I run, not a cut down version.
 
 ## Status
 
-Partly working, and honest about which parts.
+Working end to end. You can build a dataset and serve from it.
 
-What runs today: reading a MusicBrainz export, verifying it, and building artist payloads out of it.
-What does not exist yet: packaging those payloads into a dataset file the server can load, so there is currently nothing to point the server at.
-That is the piece being built now, tracked as Phase 1 in [PLAN.md](PLAN.md).
-
-So right now you can verify the pipeline works and inspect what it produces, but you cannot yet build a dataset and serve from it.
+Not in the dataset yet: images and overviews. MusicBrainz carries neither, so they come from separate enrichment that has not been built. Artists and albums will have empty `images` and a null `overview`, which Lidarr tolerates.
 
 ## What you need
 
@@ -66,7 +62,29 @@ To see a table's actual columns before writing anything against them:
 go run ./cmd/pipeline inspect mbdump.tar.bz2 release_group
 ```
 
-## Build artist payloads
+## Build the dataset
+
+```
+go run ./cmd/pipeline build mbdump.tar.bz2 mbdump-derived.tar.bz2 dataset.db
+```
+
+This reads each archive once and writes every artist and album. Expect it to take a while and to want several gigabytes of scratch space next to the output, which is removed when it finishes.
+
+Then serve it:
+
+```
+go run ./cmd/lidarr-metadata-provider -dataset dataset.db -web
+```
+
+Open http://localhost:5001/ui to check what you built, then point Lidarr at it:
+
+```
+./switch.sh --lidarr http://localhost:8686 --api-key <key> --to http://localhost:5001/
+```
+
+## Build a single artist, for checking
+
+Faster than a full build when you want to see whether the mapping is right.
 
 ```
 go run ./cmd/pipeline build-artist mbdump.tar.bz2 mbdump-derived.tar.bz2 \
@@ -78,6 +96,19 @@ It reads each archive exactly once no matter how many you ask for, so ask for ev
 
 It prints the same json the server would serve, plus a line telling you how many albums survive Lidarr's default metadata profile.
 That second number is the useful one, it is what a real Lidarr install would actually display.
+
+## What it costs
+
+Measured on 8 cores against the 20260718 export:
+
+| | |
+| --- | --- |
+| Archives to download | 7.4 GB |
+| Scratch space during the build | several GB beside the output, removed afterwards |
+| Peak memory | around 6 GB |
+| Output | a single file of a few GB |
+
+The scratch space holds tracks and recordings, roughly 35 million and 30 million rows, which are the only tables too large to keep in memory.
 
 ## If a build refuses to start
 
