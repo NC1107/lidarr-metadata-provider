@@ -124,6 +124,7 @@ Inputs settled during the Phase 0 wrap-up (2026-07-22):
 - **Hard requirement from Lidarr's client-side filter: populate `ReleaseStatuses` on every skeletal album** (needs a release → release_group join). Empty means the album is invisible under every metadata profile. Full rule in CLAUDE.md, "Client-side album filtering".
 - Gate for this phase should include the profile-survivor counts in that section (Beatles 18/1019 etc.), not just payload equality - it is the number the user actually sees.
 - Prerequisite not yet resolved: enrichment credentials (TheAudioDB / fanart.tv) for images and overviews. Core MB data does not need them; images and overviews do. Decide whether v1 ships thin (README already allows this) or we obtain keys first.
+- **Never build a pipeline step on the MusicBrainz web service.** Its rate limit is 1 request/second per source IP, enforced by dropping 100% of requests once you exceed it, and no User-Agent changes that: the UA, IP and global checks are sequential and independent. At 1 req/s a million lookups take ~12 days, so any API-driven bulk step is dead on arrival. Bulk data comes from the dumps (plain HTTPS file downloads from data.metabrainz.org, not rate limited); if we ever need queryable MB at volume, run a local mirror with `metabrainz/musicbrainz-docker` and the Live Data Feed. The web service is for ad-hoc lookups only, at <= 1 req/s with a contactable UA.
 
 **Phase 2 - serve artist/album.**
 Gate: byte-semantic equality with fixtures via a differ (ignores key order, catches missing keys/casing/type drift).
