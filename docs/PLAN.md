@@ -123,7 +123,7 @@ Inputs settled during the Phase 0 wrap-up (2026-07-22):
   **Both `mbdump.tar.bz2` (6.9 GB) and `mbdump-derived.tar.bz2` (482 MB) are required**, which an earlier version of this plan got wrong by listing the derived archive as optional enrichment.
   The core archive holds the entities; the derived archive holds the computed tables, and `release_group_meta` there is the only source of an album's first release date.
   A build from the core archive alone produces albums with no dates at all.
-  `mbdump-cover-art-archive.tar.bz2` (156 MB) remains genuinely optional, for CAA images.
+  `mbdump-cover-art-archive.tar.bz2` (163 MB) is **required too, once album art is wanted**. See the enrichment note below; it was previously written off as optional, which was wrong.
 - Archives must come from the same export. The pipeline compares replication sequences and refuses a mismatch, because joining meta rows against renumbered entity IDs yields payloads carrying other albums' dates and ratings while looking perfectly valid.
 - Verify downloads against the export's `SHA256SUMS` before building.
 - Install `lbzip2` (or `pbzip2`) on any machine that runs builds. bzip2 stores independent blocks so decompression parallelises across cores, and the single-threaded decoder is the entire bottleneck on a 6.9 GB archive. The pipeline uses one automatically when present and falls back to the standard library when not.
@@ -253,6 +253,14 @@ Separately, flate cannot see repetition across a large payload with its 32 KB wi
 **Album artists.** For a various-artists compilation we list the release group's credit (`["Various Artists"]`) where upstream lists the contributing artists (Al Green, Chuck Berry, Dick Dale). Upstream aggregates from the tracks.
 
 **Genres and links are still empty.** Both are extractable from tables already in the export; see section 9.
+
+**Album cover art needs no third party.** Corrected 2026-07-22 after checking rather than assuming.
+`mbdump-cover-art-archive.tar.bz2` carries `cover_art_archive.cover_art` (which releases have artwork) and `release_group_cover_art` (which release represents the group).
+Cover Art Archive URLs are deterministic from a release MBID, and were verified to resolve for releases in our own dataset: `https://coverartarchive.org/release/<release-mbid>/front-250`.
+So album artwork is a dump plus a URL template, with no API key and no dependency outside MetaBrainz.
+
+Artist photographs genuinely are not in MusicBrainz, and remain the one thing that needs fanart.tv or TheAudioDB.
+Artist biographies are not in the dumps either, but the Wikipedia and Wikidata links to them are, through `l_artist_url`, `url` and `link_type`; resolving those at build time is a keyless path to overviews that has not been explored yet.
 
 **Dataset update cadence is configurable, not baked in.**
 The artifact download is the project's real bandwidth cost, both for the user and for whoever hosts the artifacts, so the operator chooses.
