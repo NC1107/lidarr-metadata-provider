@@ -321,3 +321,67 @@ func decode(blob []byte, into any) error {
 	}
 	return json.Unmarshal(raw, into)
 }
+
+// SizeBreakdown reports where a dataset's bytes went.
+//
+// The artifact is downloaded by every user, so knowing which entity is
+// responsible for its size is the difference between guessing at a fix and
+// choosing one.
+type SizeBreakdown struct {
+	Table    string
+	Rows     int64
+	Bytes    int64
+	Largest  int64
+	Smallest int64
+}
+
+// Sizes measures stored payload sizes per table.
+func (r *Reader) Sizes() ([]SizeBreakdown, error) {
+	out := []SizeBreakdown{}
+	for _, table := range []string{"artist", "album"} {
+		var b SizeBreakdown
+		b.Table = table
+		row := r.db.QueryRow(`SELECT count(*), coalesce(sum(length(payload)),0),
+			coalesce(max(length(payload)),0), coalesce(min(length(payload)),0) FROM ` + table)
+		if err := row.Scan(&b.Rows, &b.Bytes, &b.Largest, &b.Smallest); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// PayloadPercentiles reports the distribution of payload sizes for a table.
+//
+// The mean alone is misleading here: a handful of heavily reissued albums
+// carry hundreds of releases while most carry one, so knowing whether the
+// bulk is large or the tail is long decides what, if anything, is worth
+// changing.
+func (r *Reader) PayloadPercentiles(table string) (map[string]int64, error) {
+	var total int64
+	if err := r.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&total); err != nil {
+		return nil, err
+	}
+	if total == 0 {
+		return map[string]int64{}, nil
+	}
+
+	out := map[string]int64{}
+	for _, p := range []struct {
+		label string
+		frac  float64
+	}{{"p50", 0.50}, {"p90", 0.90}, {"p99", 0.99}, {"p999", 0.999}} {
+		offset := int64(p.frac * float64(total))
+		if offset >= total {
+			offset = total - 1
+		}
+		var size int64
+		err := r.db.QueryRow(`SELECT length(payload) FROM `+table+
+			` ORDER BY length(payload) LIMIT 1 OFFSET ?`, offset).Scan(&size)
+		if err != nil {
+			return nil, err
+		}
+		out[p.label] = size
+	}
+	return out, nil
+}

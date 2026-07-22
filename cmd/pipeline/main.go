@@ -58,6 +58,8 @@ func run(args []string) error {
 			return usage()
 		}
 		return verify(args[1], args[2:])
+	case "stats":
+		return stats(args[1])
 	case "build":
 		if len(args) < 4 {
 			return usage()
@@ -83,6 +85,11 @@ func usage() error {
       Check downloaded archives against the export's published manifest
       before building from them. A truncated download otherwise produces a
       dataset that is quietly missing rows.
+
+  pipeline stats <dataset.db>
+      Report what a built dataset contains and where its size went. The
+      artifact is downloaded by every user, so knowing which entity is
+      responsible for its bulk decides whether anything is worth changing.
 
   pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db>
       Build the full dataset the server loads. Reads each archive once and
@@ -336,4 +343,64 @@ func humanCount(n int) string {
 		out = append(out, c)
 	}
 	return string(out)
+}
+
+// stats reports a built dataset's contents and size distribution.
+func stats(path string) error {
+	reader, err := dataset.Open(path)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	info := reader.Info()
+	fmt.Printf("dataset:     %s\n", path)
+	fmt.Printf("built:       %s\n", info.BuiltAt)
+	fmt.Printf("export:      %s (replication %d)\n", info.ExportStamp, info.ReplicationSequence)
+	fmt.Printf("contents:    %s artists, %s albums, %s tracks\n\n",
+		humanCount(int(info.Artists)), humanCount(int(info.Albums)), humanCount(int(info.Tracks)))
+
+	sizes, err := reader.Sizes()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-8s %12s %10s %12s %10s\n", "table", "rows", "total", "mean", "largest")
+	var stored int64
+	for _, s := range sizes {
+		stored += s.Bytes
+		mean := int64(0)
+		if s.Rows > 0 {
+			mean = s.Bytes / s.Rows
+		}
+		fmt.Printf("%-8s %12s %9.2fG %11dB %9s\n", s.Table, humanCount(int(s.Rows)),
+			float64(s.Bytes)/(1<<30), mean, human(s.Largest))
+	}
+
+	if st, err := os.Stat(path); err == nil {
+		fmt.Printf("\nfile:        %.2f GB, of which %.2f GB is stored payloads\n",
+			float64(st.Size())/(1<<30), float64(stored)/(1<<30))
+	}
+
+	// The mean hides the shape. A few heavily reissued albums carry hundreds
+	// of releases while most carry one, and which of those dominates decides
+	// whether a smaller format would help.
+	for _, table := range []string{"artist", "album"} {
+		p, err := reader.PayloadPercentiles(table)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%-8s payload sizes: p50 %s  p90 %s  p99 %s  p99.9 %s\n",
+			table, human(p["p50"]), human(p["p90"]), human(p["p99"]), human(p["p999"]))
+	}
+	return nil
+}
+
+func human(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(b)/(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(b)/(1<<10))
+	}
+	return fmt.Sprintf("%dB", b)
 }
