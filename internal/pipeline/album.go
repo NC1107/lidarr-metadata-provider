@@ -381,9 +381,9 @@ func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumR
 		ReleaseDate:     formatDate(g),
 		ArtistID:        artistID,
 		Artists:         artists,
-		Genres:          []string{},
+		Genres:          c.genresFor(c.groupTags[g.id]),
 		Images:          []skyhook.ImageResource{},
-		Links:           []skyhook.LinkResource{},
+		Links:           c.linksFor(c.groupURLs[g.id]),
 		Rating:          skyhook.RatingResource{},
 		Releases:        releases,
 	}

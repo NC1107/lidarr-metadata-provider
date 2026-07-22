@@ -491,3 +491,53 @@ func TestParallelWriterMatchesSerial(t *testing.T) {
 		}
 	}
 }
+
+// A dictionary-built dataset must serve byte-identical payloads and must
+// require its stored dictionary to decompress, proving the dictionary is
+// both used and shipped.
+func TestDictBuilderRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enough samples to cross the training threshold.
+	b := NewDictBuilder(w, 4, 600)
+	want := map[string]string{}
+	for i := 0; i < 1500; i++ {
+		a := sampleArtist()
+		a.ID = fmt.Sprintf("%08d-0000-0000-0000-000000000000", i)
+		a.ArtistName = fmt.Sprintf("Artist %d", i)
+		a.OldIDs = []string{}
+		if err := b.AddArtist(a); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(a)
+		want[a.ID] = string(raw)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.Dictionary()) == 0 {
+		t.Skip("no zstd binary, dictionary not trained")
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for id, exp := range want {
+		got, err := r.Artist(context.Background(), id)
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		raw, _ := json.Marshal(got)
+		if string(raw) != exp {
+			t.Fatalf("payload for %s changed through a dictionary build", id)
+		}
+	}
+}

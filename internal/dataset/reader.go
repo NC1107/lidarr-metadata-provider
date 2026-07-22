@@ -19,8 +19,9 @@ import (
 // Reader serves payloads from a dataset file. It is read-only and safe for
 // concurrent use.
 type Reader struct {
-	db   *sql.DB
-	info Info
+	db      *sql.DB
+	info    Info
+	decoder *zstd.Decoder
 }
 
 // Info is the dataset's provenance and contents, for the status view.
@@ -50,6 +51,10 @@ func Open(path string) (*Reader, error) {
 	}
 	r := &Reader{db: db}
 	if r.info, err = r.readInfo(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := r.loadDecoder(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -142,7 +147,7 @@ func (r *Reader) lookup(ctx context.Context, table, aliases, mbid string, into a
 	} else if err != nil {
 		return err
 	}
-	return decode(blob, into)
+	return r.decode(blob, into)
 }
 
 func (r *Reader) payload(ctx context.Context, table, mbid string) ([]byte, error) {
@@ -166,7 +171,7 @@ func (r *Reader) SearchArtists(ctx context.Context, query string, limit int) ([]
 	out := make([]skyhook.ArtistResource, 0, len(blobs))
 	for _, blob := range blobs {
 		var a skyhook.ArtistResource
-		if err := decode(blob, &a); err != nil {
+		if err := r.decode(blob, &a); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -202,7 +207,7 @@ func (r *Reader) SearchAlbums(ctx context.Context, query, artist string, limit i
 	out := make([]skyhook.AlbumResource, 0, limit)
 	for _, blob := range blobs {
 		var a skyhook.AlbumResource
-		if err := decode(blob, &a); err != nil {
+		if err := r.decode(blob, &a); err != nil {
 			return nil, err
 		}
 		if artist != "" && !creditedTo(a, artist) {
@@ -311,19 +316,36 @@ func ftsQuery(q, conjunction string) string {
 	return strings.Join(quoted, conjunction)
 }
 
-// One decoder serves every read. zstd's decoder is safe for concurrent use
-// and reuses its buffers, which matters when each request decompresses a
-// payload.
-var decoder = func() *zstd.Decoder {
-	d, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(0))
-	if err != nil {
-		panic("dataset: " + err.Error())
+// loadDecoder configures decompression, registering the file's dictionary if
+// it has one. A decoder given the dictionary still decodes payloads written
+// without it, so this is correct whether or not the build trained one.
+func (r *Reader) loadDecoder() error {
+	var dict []byte
+	row := r.db.QueryRow(`SELECT data FROM dictionary WHERE id = 1`)
+	if err := row.Scan(&dict); err != nil && err != sql.ErrNoRows {
+		// A file predating the dictionary table simply has no dictionary.
+		if !isNoSuchTable(err) {
+			return err
+		}
 	}
-	return d
-}()
+	opts := []zstd.DOption{zstd.WithDecoderConcurrency(0)}
+	if len(dict) > 0 {
+		opts = append(opts, zstd.WithDecoderDicts(dict))
+	}
+	dec, err := zstd.NewReader(nil, opts...)
+	if err != nil {
+		return err
+	}
+	r.decoder = dec
+	return nil
+}
 
-func decode(blob []byte, into any) error {
-	raw, err := decoder.DecodeAll(blob, nil)
+func isNoSuchTable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+func (r *Reader) decode(blob []byte, into any) error {
+	raw, err := r.decoder.DecodeAll(blob, nil)
 	if err != nil {
 		return fmt.Errorf("dataset: decompressing payload: %w", err)
 	}

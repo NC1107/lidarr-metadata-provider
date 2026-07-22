@@ -222,6 +222,15 @@ type collector struct {
 	releaseByID   map[int]*releaseRow
 	releasesByRG  map[int][]*releaseRow
 	mediumToGroup map[int]int
+
+	// Enrichment: genres from tags, links from urls. All from the export.
+	genreNames map[string]bool
+	tagNames   map[int]string
+	artistTags map[int][]weightedTag
+	groupTags  map[int][]weightedTag
+	urls       map[int]string
+	artistURLs map[int][]int
+	groupURLs  map[int][]int
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -244,6 +253,13 @@ func newCollector(want map[string]bool) *collector {
 		releaseByID:    map[int]*releaseRow{},
 		releasesByRG:   map[int][]*releaseRow{},
 		mediumToGroup:  map[int]int{},
+		genreNames:     map[string]bool{},
+		tagNames:       map[int]string{},
+		artistTags:     map[int][]weightedTag{},
+		groupTags:      map[int][]weightedTag{},
+		urls:           map[int]string{},
+		artistURLs:     map[int][]int{},
+		groupURLs:      map[int][]int{},
 	}
 }
 
@@ -269,16 +285,27 @@ func (c *collector) coreHandlers() map[string]mbdump.RowFunc {
 			handlers[name] = fn
 		}
 	}
+	// Genre vocabulary and url tables are in the core archive.
+	handlers["genre"] = c.readGenre
+	handlers["url"] = c.readURL
+	handlers["l_artist_url"] = c.readArtistURL
+	handlers["l_release_group_url"] = c.readReleaseGroupURL
 	return handlers
 }
 
 // derivedHandlers reads mbdump-derived.tar.bz2, which carries the computed
 // tables. These only annotate entities the core pass already found.
 func (c *collector) derivedHandlers() map[string]mbdump.RowFunc {
-	return map[string]mbdump.RowFunc{
+	h := map[string]mbdump.RowFunc{
 		"artist_meta":        c.readArtistMeta,
 		"release_group_meta": c.readReleaseGroupMeta,
+		"tag":                c.readTag,
+		"artist_tag":         c.readArtistTag,
 	}
+	if c.staging != nil {
+		h["release_group_tag"] = c.readReleaseGroupTag
+	}
+	return h
 }
 
 // readTypeTable reads an id-to-name lookup table. The width is passed in
@@ -557,6 +584,8 @@ func (c *collector) artist(a *artistRow) *skyhook.ArtistResource {
 		if name, ok := c.artistTypes[a.typeID]; ok && name != "" {
 			artist.Type = &name
 		}
+		artist.Genres = c.genresFor(c.artistTags[a.id])
+		artist.Links = c.linksFor(c.artistURLs[a.id])
 
 		for _, gid := range a.groups {
 			g := c.groups[gid]

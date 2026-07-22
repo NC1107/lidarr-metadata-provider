@@ -94,9 +94,10 @@ var coreTables = []string{
 	"artist_type", "release", "release_group", "release_group_gid_redirect",
 	"release_group_primary_type", "release_group_secondary_type",
 	"release_group_secondary_type_join", "release_status",
+	"genre", "url", "l_artist_url", "l_release_group_url",
 }
 
-var derivedTables = []string{"artist_meta", "release_group_meta"}
+var derivedTables = []string{"artist_meta", "release_group_meta", "tag", "artist_tag"}
 
 func sampleTables() map[string]string {
 	return map[string]string{
@@ -186,6 +187,28 @@ func sampleTables() map[string]string {
 			mbdump.GIDRedirectGID:   "11111111-dead-beef-0000-000000000000",
 			mbdump.GIDRedirectNewID: "50",
 		}),
+		"genre": strings.Join([]string{
+			row(mbdump.GenreColumns, map[int]string{mbdump.GenreName: "rock"}),
+			row(mbdump.GenreColumns, map[int]string{mbdump.GenreName: "pop rock"}),
+		}, "\n"),
+		"tag": strings.Join([]string{
+			row(mbdump.TagColumns, map[int]string{mbdump.TagID: "70", mbdump.TagName: "rock"}),
+			row(mbdump.TagColumns, map[int]string{mbdump.TagID: "71", mbdump.TagName: "pop rock"}),
+			row(mbdump.TagColumns, map[int]string{mbdump.TagID: "72", mbdump.TagName: "seen live"}),
+		}, "\n"),
+		"artist_tag": strings.Join([]string{
+			row(mbdump.ArtistTagColumns, map[int]string{mbdump.ArtistTagArtist: "1", mbdump.ArtistTagTag: "71", mbdump.ArtistTagCount: "3"}),
+			row(mbdump.ArtistTagColumns, map[int]string{mbdump.ArtistTagArtist: "1", mbdump.ArtistTagTag: "70", mbdump.ArtistTagCount: "9"}),
+			row(mbdump.ArtistTagColumns, map[int]string{mbdump.ArtistTagArtist: "1", mbdump.ArtistTagTag: "72", mbdump.ArtistTagCount: "5"}),
+		}, "\n"),
+		"url": strings.Join([]string{
+			row(mbdump.URLColumns, map[int]string{mbdump.URLID: "900", mbdump.URLValue: "https://www.thelas.com/"}),
+			row(mbdump.URLColumns, map[int]string{mbdump.URLID: "901", mbdump.URLValue: "https://www.discogs.com/artist/123"}),
+		}, "\n"),
+		"l_artist_url": strings.Join([]string{
+			row(mbdump.LinkURLColumns, map[int]string{mbdump.LinkURLEntity0: "1", mbdump.LinkURLEntity1: "900"}),
+			row(mbdump.LinkURLColumns, map[int]string{mbdump.LinkURLEntity0: "1", mbdump.LinkURLEntity1: "901"}),
+		}, "\n"),
 	}
 }
 
@@ -356,5 +379,21 @@ func TestBuildDefaultsUntypedAlbumsToOther(t *testing.T) {
 		if al.Title == "Untyped" && al.Type != "Other" {
 			t.Errorf("untyped album mapped to %q, want Other", al.Type)
 		}
+	}
+}
+
+// Genres come from tags that are recognised genres, strongest vote first,
+// title-cased. "seen live" is a tag but not a genre and must be dropped.
+func TestBuildArtistGenresAndLinks(t *testing.T) {
+	a := buildOne(t)
+	if len(a.Genres) != 2 || a.Genres[0] != "Rock" || a.Genres[1] != "Pop Rock" {
+		t.Errorf("Genres = %v, want [Rock, Pop Rock] ordered by votes", a.Genres)
+	}
+	types := map[string]string{}
+	for _, l := range a.Links {
+		types[l.Type] = l.Target
+	}
+	if types["discogs"] == "" || types["thelas"] == "" {
+		t.Errorf("Links = %v, want discogs and thelas typed by domain", a.Links)
 	}
 }

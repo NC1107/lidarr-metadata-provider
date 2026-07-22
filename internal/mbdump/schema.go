@@ -146,6 +146,41 @@ const (
 
 	// medium_format shares the lookup table layout except for width.
 	MediumFormatColumns = 8
+
+	// genre is the controlled vocabulary that decides which tags count as
+	// genres. tag names that appear here are genres; the rest are folksonomy.
+	GenreColumns = 6
+	GenreName    = 2
+
+	// tag maps a numeric tag id to its name. artist_tag and
+	// release_group_tag reference tags by id.
+	TagColumns = 3
+	TagID      = 0
+	TagName    = 1
+
+	// artist_tag and release_group_tag carry the vote count that orders
+	// genres by how strongly the community applied them.
+	ArtistTagColumns = 4
+	ArtistTagArtist  = 0
+	ArtistTagTag     = 1
+	ArtistTagCount   = 2
+
+	ReleaseGroupTagColumns = 4
+	ReleaseGroupTagGroup   = 0
+	ReleaseGroupTagTag     = 1
+	ReleaseGroupTagCount   = 2
+
+	// l_artist_url and l_release_group_url link an entity to a url row.
+	// entity0 is the entity, entity1 is the url.
+	LinkURLColumns = 9
+	LinkURLEntity0 = 2
+	LinkURLEntity1 = 3
+
+	// url holds the address itself. The link type Lidarr shows is derived
+	// from the address, not from a relationship type.
+	URLColumns = 5
+	URLID      = 0
+	URLValue   = 2
 )
 
 // CheckColumns verifies a row has the expected width, naming the table so a

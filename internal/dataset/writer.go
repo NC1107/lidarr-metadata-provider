@@ -34,6 +34,7 @@ type Writer struct {
 	tracks  int64
 
 	enc     *zstd.Encoder
+	dict    []byte
 	batched int
 }
 
@@ -240,6 +241,29 @@ func (w *Writer) Finish(exportStamp string, replicationSeq int) error {
 	return w.db.Close()
 }
 
+// SetDictionary switches encoding to use a trained dictionary and records it
+// in the file so a reader can decompress. It must be called before any
+// payload is written, since payloads written earlier would not carry it.
+func (w *Writer) SetDictionary(dict []byte) error {
+	if len(dict) == 0 {
+		return nil
+	}
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBestCompression), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return err
+	}
+	w.enc.Close()
+	w.enc = enc
+	w.dict = dict
+	if _, err := w.db.Exec(`INSERT OR REPLACE INTO dictionary (id, data) VALUES (1, ?)`, dict); err != nil {
+		return fmt.Errorf("dataset: storing dictionary: %w", err)
+	}
+	return nil
+}
+
+// Dictionary returns the encoding dictionary, or nil if none is set.
+func (w *Writer) Dictionary() []byte { return w.dict }
+
 // Counts reports what has been written so far.
 func (w *Writer) Counts() (artists, albums, tracks int64) {
 	return w.artists, w.albums, w.tracks
@@ -315,7 +339,11 @@ func NewParallel(w *Writer, workers int) *Parallel {
 			defer wg.Done()
 			// Each worker owns an encoder; sharing one would serialise them
 			// again on its internal state.
-			enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+			opts := []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedBestCompression)}
+			if p.w.dict != nil {
+				opts = append(opts, zstd.WithEncoderDict(p.w.dict))
+			}
+			enc, err := zstd.NewWriter(nil, opts...)
 			if err != nil {
 				return
 			}

@@ -21,7 +21,7 @@ import (
 // schemaVersion guards the file format, not the MusicBrainz schema. A reader
 // refuses a version it was not written against rather than misreading a
 // changed layout.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // createSQL is applied to a new dataset file.
 //
@@ -40,6 +40,14 @@ PRAGMA synchronous = OFF;
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- The zstd dictionary the payloads were compressed with, trained on this
+-- build's own payloads. Stored here so a reader needs nothing external to
+-- decompress. Absent means payloads were compressed without one.
+CREATE TABLE IF NOT EXISTS dictionary (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    data BLOB NOT NULL
 );
 
 -- norm is the name with case, punctuation and "&" folded away, so an exact

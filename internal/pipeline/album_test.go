@@ -90,6 +90,8 @@ var albumCoreTables = append(append([]string{}, coreTables...),
 	"area", "label", "medium", "medium_format", "recording",
 	"release_country", "release_label", "release_unknown_country", "track")
 
+func init() { derivedTables = append(derivedTables, "release_group_tag") }
+
 func buildAlbums(t *testing.T) map[string]*skyhook.AlbumResource {
 	t.Helper()
 	tables := albumTables()

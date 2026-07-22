@@ -287,8 +287,9 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 		return err
 	}
 	// Marshalling and compressing dominate a build and parallelise cleanly;
-	// only the SQLite writes have to stay serial.
-	par := dataset.NewParallel(writer, 0)
+	// only the SQLite writes have to stay serial. The builder also trains a
+	// compression dictionary from the first payloads it sees.
+	par := dataset.NewDictBuilder(writer, 0, 0)
 
 	start := time.Now()
 	artistsWritten, albumsWritten := 0, 0
