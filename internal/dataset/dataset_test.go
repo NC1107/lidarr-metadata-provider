@@ -351,3 +351,74 @@ func TestSearchMatchesAmpersandSpelledAsAnd(t *testing.T) {
 		}
 	}
 }
+
+// Lidarr sends the artist for manual import, where the file already says who
+// made the record. Ignoring it returns every album sharing a title, and
+// "Greatest Hits" is a title thousands of artists share.
+func TestSearchAlbumsNarrowsByArtist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dataset.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	album := func(mbid, title, artist string) *skyhook.AlbumResource {
+		return &skyhook.AlbumResource{
+			ID: mbid, OldIDs: []string{}, Title: title, Aliases: []string{},
+			SecondaryTypes: []string{}, ReleaseStatuses: []string{"Official"},
+			Genres: []string{}, Images: []skyhook.ImageResource{},
+			Links: []skyhook.LinkResource{}, Releases: []skyhook.ReleaseResource{},
+			Artists: []skyhook.AlbumArtistResource{{ArtistName: artist}},
+		}
+	}
+	for _, a := range []*skyhook.AlbumResource{
+		album("aaaaaaaa-0000-0000-0000-000000000001", "Greatest Hits", "Queen"),
+		album("bbbbbbbb-0000-0000-0000-000000000002", "Greatest Hits", "ABBA"),
+		album("cccccccc-0000-0000-0000-000000000003", "Greatest Hits", "Simon & Garfunkel"),
+	} {
+		if err := w.AddAlbum(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ctx := context.Background()
+
+	all, err := r.SearchAlbums(ctx, "greatest hits", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("unfiltered search returned %d, want all 3", len(all))
+	}
+
+	only, err := r.SearchAlbums(ctx, "greatest hits", "ABBA", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(only) != 1 || only[0].Artists[0].ArtistName != "ABBA" {
+		t.Fatalf("artist filter returned %d results: %+v", len(only), only)
+	}
+
+	// A file tagged with "and" must still find the album credited with "&".
+	amp, err := r.SearchAlbums(ctx, "greatest hits", "Simon and Garfunkel", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(amp) != 1 {
+		t.Errorf("searching with 'and' found %d, want the album credited with '&'", len(amp))
+	}
+
+	none, err := r.SearchAlbums(ctx, "greatest hits", "Nobody At All", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Errorf("unknown artist returned %d results, want none", len(none))
+	}
+}

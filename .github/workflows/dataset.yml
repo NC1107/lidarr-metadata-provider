@@ -7,12 +7,19 @@
 name: dataset
 
 on:
-  schedule:
-    # MusicBrainz exports land Wednesday and Saturday around 00:20 UTC.
-    # Running well after gives the mirror time to finish publishing, and the
-    # offset keeps this off the top of the hour, which is when every other
-    # scheduled job on the planet fires.
-    - cron: "37 6 * * 3,6"
+  # The schedule is deliberately commented out while the pipeline is still
+  # changing. A build costs the better part of an hour of runner time and
+  # pulls 7.4 GB from a donation funded mirror, which is not worth spending
+  # on output we are still validating locally. Uncomment once the dataset
+  # format and contents are settled.
+  #
+  # MusicBrainz exports land Wednesday and Saturday around 00:20 UTC. Running
+  # well after gives the mirror time to finish publishing, and the offset
+  # keeps this off the top of the hour, when every other scheduled job on the
+  # planet fires.
+  #
+  # schedule:
+  #   - cron: "37 6 * * 3,6"
   workflow_dispatch:
     inputs:
       export:
@@ -36,22 +43,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
+      # Runs before Go is installed, and deliberately leaves the hosted tool
+      # directory alone. Clearing it after setup-go deletes the Go it just
+      # installed, which fails the next step with "go: command not found".
+      #
       # A standard runner starts with roughly 21-29 GB free, and a build needs
-      # the two archives plus several gigabytes of staging plus the output.
-      # Reclaiming the preinstalled toolchains is what makes it fit.
+      # the two archives plus staging plus the output. Reclaiming the
+      # preinstalled toolchains is what makes it fit.
       - name: Reclaim disk space
         run: |
           echo "before:"; df -h / | tail -1
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost /usr/local/lib/node_modules \
-                      "$AGENT_TOOLSDIRECTORY" || true
+                      /usr/local/share/boost /usr/local/lib/node_modules || true
           sudo apt-get clean || true
           echo "after:"; df -h / | tail -1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       # bzip2 stores independent blocks, so decompression parallelises. The
       # single threaded decoder is the slowest part of a build by a wide

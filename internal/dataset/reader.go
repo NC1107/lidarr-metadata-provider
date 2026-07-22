@@ -175,21 +175,61 @@ func (r *Reader) SearchArtists(ctx context.Context, query string, limit int) ([]
 	return out, nil
 }
 
-// SearchAlbums finds albums by title, using the same staged ranking.
+// SearchAlbums finds albums by title, narrowed to an artist when one is
+// given.
+//
+// Lidarr sends the artist for manual import, where the file already says who
+// made the record and the only question is which album it is. Ignoring it
+// returns every album sharing a title, and "Greatest Hits" is a title
+// thousands of artists share.
+//
+// The narrowing happens after retrieval rather than in the query, because the
+// full text index holds titles alone. That means asking for more candidates
+// than are wanted and discarding the ones credited to somebody else.
 func (r *Reader) SearchAlbums(ctx context.Context, query, artist string, limit int) ([]skyhook.AlbumResource, error) {
-	blobs, err := r.searchStaged(ctx, "album", "album_fts", query, limit)
+	if limit <= 0 {
+		limit = 25
+	}
+	want := limit
+	if artist = Normalize(artist); artist != "" {
+		want = limit * 8
+	}
+
+	blobs, err := r.searchStaged(ctx, "album", "album_fts", query, want)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]skyhook.AlbumResource, 0, len(blobs))
+
+	out := make([]skyhook.AlbumResource, 0, limit)
 	for _, blob := range blobs {
 		var a skyhook.AlbumResource
 		if err := decode(blob, &a); err != nil {
 			return nil, err
 		}
+		if artist != "" && !creditedTo(a, artist) {
+			continue
+		}
 		out = append(out, a)
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
+}
+
+// creditedTo reports whether an album names this artist.
+//
+// Matching is loose in one direction on purpose: a file tagged "Simon &
+// Garfunkel" should find an album credited to "Simon and Garfunkel", and a
+// compilation credited to several artists should be found by any one of them.
+func creditedTo(a skyhook.AlbumResource, artist string) bool {
+	for _, credited := range a.Artists {
+		name := Normalize(credited.ArtistName)
+		if name == artist || strings.Contains(name, artist) || strings.Contains(artist, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // searchStaged runs exact, then all-terms, then any-terms, stopping once it
