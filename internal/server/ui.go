@@ -221,12 +221,10 @@ func (s *Server) queryLocal(r *http.Request, mode, query, artist string) sideRes
 // stays neutral and the origin line explains.
 func (s *Server) sourceLabel() string {
 	switch {
-	case s.cfg.Dataset.Present && len(s.cfg.FallbackNames) > 0:
-		return "This server"
 	case s.cfg.Dataset.Present:
-		return "Local database"
+		return "This server"
 	case len(s.cfg.FallbackNames) > 0:
-		return "Live MusicBrainz lookup"
+		return "This server (no database, using MusicBrainz)"
 	default:
 		return "This server"
 	}
