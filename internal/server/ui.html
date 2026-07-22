@@ -70,7 +70,6 @@
   header .wrap { display: flex; align-items: center; gap: 16px; height: 58px; }
   .brand { display: flex; align-items: center; gap: 9px; flex: none; }
   .brand h1 { font-size: var(--fs-h1); margin: 0; font-weight: 600; letter-spacing: -0.015em; white-space: nowrap; }
-  .brand .ver { font: 500 var(--fs-micro)/1 var(--mono); color: var(--muted); }
 
   [role=tablist] { display: flex; gap: 2px; flex: none; }
   [role=tab] {
@@ -84,11 +83,11 @@
      the type, artist and comparison options are one click away without
      occupying a row of their own. */
   .searchbar { position: relative; flex: 1; min-width: 220px; max-width: 620px; margin-left: auto; }
-  .searchbar input {
+  .searchbar > input {
     font: inherit; width: 100%; padding: 8px 76px 8px 12px; border-radius: 99px;
     border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
   }
-  .searchbar input:hover { border-color: var(--muted); }
+  .searchbar > input:hover { border-color: var(--muted); }
   .sb-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
   .icon-btn {
     display: grid; place-items: center; width: 30px; height: 30px; padding: 0; cursor: pointer;
@@ -105,13 +104,24 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
     box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 14px; display: grid; gap: 14px;
   }
-  .filters[hidden] { display: none; }
-  .filters label.row { display: flex; align-items: center; gap: 9px; font-size: var(--fs-body); }
+  [hidden] { display: none !important; }
   .filters select, .filters input[type=text] {
     font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--r-sm);
     border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
   }
-  .fgroup { display: grid; gap: 7px; }
+  .fgroup { display: grid; gap: 8px; }
+
+  /* Comparison sources read as switches rather than a bare checkbox column. */
+  .srcs { display: grid; gap: 6px; }
+  .src {
+    display: flex; align-items: center; gap: 10px; cursor: pointer;
+    padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
+    background: var(--bg); font-size: var(--fs-body); line-height: 1.2;
+  }
+  .src:hover { border-color: var(--line-strong); }
+  .src input { margin: 0; flex: none; accent-color: var(--accent); }
+  .src span { flex: 1; min-width: 0; }
+  .src:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 
   .status { display: flex; align-items: center; gap: 7px; flex: none; }
   .dot { width: 8px; height: 8px; border-radius: 99px; background: var(--muted); }
@@ -241,7 +251,6 @@
         <circle cx="15" cy="12" r="6.2" stroke="var(--muted)" stroke-width="1.8"/>
       </svg>
       <h1>Lidarr-Metadata-Provider</h1>
-      <span class="ver" id="version"></span>
     </div>
 
     <div role="tablist" aria-label="Views">
@@ -278,13 +287,15 @@
           </select>
         </div>
         <div class="fgroup" id="l-artist" hidden>
-          <span class="lbl">Artist</span>
-          <input type="text" id="artist" placeholder="Optional" autocomplete="off">
+          <span class="lbl">By artist</span>
+          <input type="text" id="artist" placeholder="Narrow to one artist" autocomplete="off">
         </div>
         <div class="fgroup">
           <span class="lbl">Compare against</span>
-          <label class="row"><input type="checkbox" id="cmp-official"> Lidarr official</label>
-          <label class="row"><input type="checkbox" id="cmp-mb"> MusicBrainz API</label>
+          <div class="srcs">
+            <label class="src"><input type="checkbox" id="cmp-official"><span>Lidarr official</span></label>
+            <label class="src"><input type="checkbox" id="cmp-mb"><span>MusicBrainz API</span></label>
+          </div>
         </div>
       </div>
     </form>
@@ -372,7 +383,6 @@ async function refreshStatus() {
     const s = await (await fetch("/ui/status")).json();
     lastStatus = s;
     liveLookups = !!(s.fallback && s.fallback.enabled);
-    $("version").textContent = s.version || "";
     const local = s.dataset && s.dataset.present;
     $("status-dot").className = "dot " + (local ? "local" : liveLookups ? "live" : "");
     $("status-text").textContent = local ? "Serving from local database"
@@ -556,12 +566,9 @@ async function loadDatabase() {
   lastStatus = s;
 
   const ds = s.dataset || {}, m = s.metrics || {}, fb = s.fallback || {};
-  const banner = ds.present ? "" :
-    `<div class="banner">No local database. Every request goes to MusicBrainz live, paced at one per second.</div>`;
-
   const pair = (k, v) => `<div><span class="lbl">${k}</span><span class="v">${v}</span></div>`;
 
-  $("db").innerHTML = banner + `<div class="cards">
+  $("db").innerHTML = `<div class="cards">
     <section class="panel card"><h2>Database</h2><div class="kv">
       ${pair("Snapshot", esc(ds.exportTimestamp ? dateText(ds.exportTimestamp) : "none"))}
       ${pair("Installed", esc(ds.installedAt ? dateText(ds.installedAt) : "not installed"))}
