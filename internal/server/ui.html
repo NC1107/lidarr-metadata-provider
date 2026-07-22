@@ -4,164 +4,267 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lidarr-metadata-provider</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23111114%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%279%27 fill=%27none%27 stroke=%27%23d8964a%27 stroke-width=%272%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%272.5%27 fill=%27%23d8964a%27/%3E%3C/svg%3E">
 <style>
+  /* One scale for size, one for space, one accent. Values are deliberate,
+     not nudged: no half-pixel sizes, no weights between the three below. */
   :root {
     color-scheme: light dark;
-    --bg: #fbfbfd; --panel: #fff; --line: #e2e2e8; --ink: #16161a;
-    --muted: #6a6a76; --accent: #3b5bdb; --ok: #197d4a; --warn: #b3541e;
-    --err: #b02a37; --cloud: #5b5e79; --code-bg: #f5f5f8; --radius: 10px;
+
+    --bg: #faf9f7;
+    --panel: #ffffff;
+    --sunk: #f2f0ec;
+    --line: #e0ddd6;
+    --line-strong: #c9c5bb;
+    --ink: #1a1815;
+    --muted: #6b665d;
+
+    /* Amber rather than the blue every dev tool reaches for. Used only for
+       brand, the primary action, focus, and the active tab. */
+    --accent: #a8621c;
+    --accent-ink: #ffffff;
+    --accent-soft: rgba(168, 98, 28, 0.10);
+
+    --ok: #2c6e49;
+    --ok-soft: rgba(44, 110, 73, 0.12);
+    --alert: #a4303f;
+    --alert-soft: rgba(164, 48, 63, 0.10);
+    --cloud: #5a5750;
+
+    --fs-display: 30px;
+    --fs-h1: 17px;
+    --fs-h2: 15px;
+    --fs-body: 14px;
+    --fs-small: 12px;
+    --fs-micro: 11px;
+
+    --r-sm: 4px;
+    --r-md: 6px;
+    --shadow: 0 1px 2px rgba(26, 24, 21, .06), 0 2px 8px rgba(26, 24, 21, .04);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --wide: 1360px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #141417; --panel: #1c1c21; --line: #2e2e36; --ink: #ececf1;
-      --muted: #9a9aa8; --accent: #8aa2ff; --ok: #57c98c; --warn: #e0995e;
-      --err: #ff8b93; --cloud: #b4b6dd; --code-bg: #17171b;
+      --bg: #100f0d;
+      --panel: #1a1917;
+      --sunk: #141311;
+      --line: #2e2c28;
+      --line-strong: #45423c;
+      --ink: #efece6;
+      --muted: #9b958a;
+
+      --accent: #d8964a;
+      --accent-ink: #17150f;
+      --accent-soft: rgba(216, 150, 74, 0.14);
+
+      --ok: #63c48d;
+      --ok-soft: rgba(99, 196, 141, 0.14);
+      --alert: #e8747f;
+      --alert-soft: rgba(232, 116, 127, 0.14);
+      --cloud: #a09a8e;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 2px 10px rgba(0, 0, 0, .35);
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: var(--fs-body)/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
+  .wrap { max-width: var(--wide); margin: 0 auto; padding: 0 24px; }
+
+  /* Header. The mark and wordmark align with the content below, which they
+     did not before: the header spanned the full viewport while main was
+     centred, so they diverged on wide monitors. */
   header {
     border-bottom: 1px solid var(--line); background: var(--panel);
-    padding: 12px 20px; display: flex; align-items: center; gap: 16px;
-    flex-wrap: wrap; position: sticky; top: 0; z-index: 5;
+    position: sticky; top: 0; z-index: 5;
   }
-  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  [role=tablist] { display: flex; gap: 4px; }
+  header .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand svg { display: block; }
+  .brand h1 {
+    font-size: var(--fs-h1); margin: 0; font-weight: 600; letter-spacing: -0.015em;
+  }
+  .brand .ver {
+    font: 500 var(--fs-micro)/1 var(--mono); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 99px; padding: 3px 7px;
+  }
+
+  [role=tablist] { display: flex; gap: 2px; margin-left: 8px; }
   [role=tab] {
-    font: inherit; font-size: 13.5px; font-weight: 550; padding: 6px 14px;
-    border-radius: 7px; border: 1px solid transparent; background: none;
-    color: var(--muted); cursor: pointer;
+    font: inherit; font-size: var(--fs-body); font-weight: 500; padding: 6px 12px;
+    border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); cursor: pointer;
   }
-  [role=tab][aria-selected=true] { background: var(--bg); color: var(--ink); border-color: var(--line); }
-  .live-pill { margin-left: auto; font-size: 12.5px; color: var(--muted); }
-  .live-pill b { color: var(--ink); font-weight: 600; }
-  main { max-width: 1500px; margin: 0 auto; padding: 20px; }
+  [role=tab]:hover { color: var(--ink); }
+  [role=tab][aria-selected=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+  /* Status reads as a state, not as a sentence in the corner. */
+  .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 99px; background: var(--muted); flex: none; }
+  .dot.live { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+  .dot.local { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  main { padding: 24px 0 64px; }
   [role=tabpanel][hidden] { display: none; }
 
-  form {
-    display: grid; gap: 10px; background: var(--panel); padding: 14px;
-    border: 1px solid var(--line); border-radius: var(--radius);
-    grid-template-columns: 175px minmax(240px, 1fr) auto auto; align-items: end;
+  /* Micro labels are uppercase and tracked, which separates label from value
+     without another font size. */
+  .lbl {
+    font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--muted);
   }
-  form.with-artist { grid-template-columns: 175px minmax(240px, 1fr) minmax(0, 240px) auto auto; }
+
+  form {
+    display: grid; gap: 12px; background: var(--panel); padding: 16px;
+    border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow);
+    grid-template-columns: 170px minmax(220px, 1fr) auto auto; align-items: end;
+  }
+  form.with-artist { grid-template-columns: 170px minmax(220px, 1fr) minmax(0, 220px) auto auto; }
   form:not(.with-artist) #l-artist { display: none; }
   @media (max-width: 900px) { form, form.with-artist { grid-template-columns: 1fr; } }
-  label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); font-weight: 500; }
+  label { display: grid; gap: 6px; }
   select, input[type=text] {
-    font: inherit; padding: 8px 10px; border-radius: 7px; width: 100%; min-width: 0;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    font: inherit; padding: 8px 10px; border-radius: var(--r-sm); width: 100%; min-width: 0;
+    border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
   }
-  input:focus-visible, select:focus-visible, button:focus-visible, [role=tab]:focus-visible {
-    outline: 2px solid var(--accent); outline-offset: 1px;
-  }
+  select:hover, input[type=text]:hover { border-color: var(--muted); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button.go {
-    font: inherit; font-weight: 600; padding: 8px 18px; border-radius: 7px;
-    border: 1px solid transparent; background: var(--accent); color: #fff; cursor: pointer;
+    font: inherit; font-weight: 600; padding: 9px 20px; border-radius: var(--r-sm);
+    border: 1px solid transparent; background: var(--accent); color: var(--accent-ink); cursor: pointer;
   }
-  button.go:disabled { opacity: .55; cursor: progress; }
-  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; white-space: nowrap; padding-bottom: 8px; }
+  button.go:hover { filter: brightness(1.08); }
+  button.go:disabled { opacity: .5; cursor: progress; filter: none; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: var(--fs-body); white-space: nowrap; padding-bottom: 8px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--r-md); box-shadow: var(--shadow);
+  }
+
+  /* Idle state. The console used to open on one grey sentence over an empty
+     screen, which reads as a component that failed to render. */
+  .idle { margin-top: 24px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .idle .panel { padding: 18px; }
+  .idle h2 { margin: 0 0 14px; font-size: var(--fs-h2); font-weight: 600; }
+  .facts { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+  .fact { display: grid; gap: 3px; }
+  .fact .v { font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
+  .fact .v.big { font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font: inherit; font-size: var(--fs-small); padding: 6px 11px; cursor: pointer;
+    border: 1px solid var(--line-strong); border-radius: 99px;
+    background: var(--bg); color: var(--ink);
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
 
   .verdict {
-    margin-top: 16px; padding: 13px 16px; border-radius: var(--radius);
-    border: 1px solid var(--line); border-left-width: 4px; background: var(--panel);
-    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    margin-top: 24px; padding: 15px 18px; border-radius: var(--r-md);
+    border: 1px solid var(--line); border-left: 3px solid var(--muted); background: var(--panel);
+    box-shadow: var(--shadow); display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
   }
   .verdict.good { border-left-color: var(--ok); }
-  .verdict.warn { border-left-color: var(--warn); }
-  .verdict.bad  { border-left-color: var(--err); }
-  .verdict.unknown { border-left-color: var(--muted); }
-  .verdict strong { font-size: 15px; font-weight: 620; }
-  .verdict .stat { font-size: 13px; color: var(--muted); }
-  .verdict .stat b { color: var(--ink); font-weight: 600; }
+  .verdict.warn { border-left-color: var(--accent); }
+  .verdict.bad { border-left-color: var(--alert); }
+  .verdict strong { font-size: var(--fs-h2); font-weight: 600; }
+  .verdict .stat { font-size: var(--fs-small); color: var(--muted); }
+  .verdict .stat b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 
-  table.scoreboard {
-    width: 100%; border-collapse: collapse; margin-top: 14px; background: var(--panel);
-    border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
-  }
-  .scoreboard th, .scoreboard td { padding: 9px 14px; text-align: right; font-size: 13.5px; }
-  .scoreboard thead th { font-size: 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); }
+  table.scoreboard { width: 100%; border-collapse: collapse; margin-top: 16px; }
+  .scoreboard th, .scoreboard td { padding: 10px 16px; text-align: right; font-size: var(--fs-body); }
+  .scoreboard thead th { background: var(--sunk); border-bottom: 1px solid var(--line); }
+  .scoreboard thead th:not(:first-child) { text-align: right; }
   .scoreboard th[scope=row] { text-align: left; color: var(--muted); font-weight: 500; }
-  .scoreboard thead th:first-child, .scoreboard tbody th { text-align: left; }
-  .scoreboard td { font-variant-numeric: tabular-nums; }
+  .scoreboard thead th:first-child { text-align: left; }
+  .scoreboard td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .scoreboard tbody tr + tr th, .scoreboard tbody tr + tr td { border-top: 1px solid var(--line); }
-  .delta { font-weight: 650; }
+  .delta { font-weight: 600; }
   .delta.good { color: var(--ok); }
-  .delta.bad { color: var(--err); }
+  .delta.bad { color: var(--alert); }
   .delta.flat { color: var(--muted); font-weight: 500; }
 
   .panes { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
-  .pane {
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-    overflow: hidden; border-left-width: 3px;
-  }
-  .pane.local { border-left-color: var(--accent); }
-  .pane.official { border-left-color: var(--cloud); }
-  .pane > h2 { margin: 0; padding: 11px 14px 4px; font-size: 14px; font-weight: 650; }
-  .pane .origin { padding: 0 14px 10px; font-size: 12px; color: var(--muted); }
+  .pane { overflow: hidden; }
+  .pane > h2 { margin: 0; padding: 16px 18px 2px; font-size: var(--fs-h2); font-weight: 600; }
+  .pane .origin { padding: 0 18px 14px; font-size: var(--fs-small); color: var(--muted); }
   .pane .bar {
-    padding: 8px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--muted);
+    padding: 10px 18px; background: var(--sunk);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    font: 500 var(--fs-small)/1 var(--mono); color: var(--muted);
   }
-  .tag { font-size: 11.5px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-weight: 600; }
-  .tag.ok { color: var(--ok); border-color: currentColor; }
-  .tag.bad { color: var(--err); border-color: currentColor; }
-  .items { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow: auto; }
-  .items li { padding: 10px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 3px; }
-  .items li:last-child { border-bottom: 0; }
-  .row1 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  .row1 strong { font-weight: 620; }
-  .row1 .sub { color: var(--muted); font-size: 13px; }
-  .row2 { color: var(--muted); font-size: 12.5px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-  .shown { color: var(--ok); font-weight: 600; cursor: help; }
-  .shown.none { color: var(--err); }
-  .severe { color: var(--err); font-weight: 600; }
-  code.mbid { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
-  .empty, .error, .placeholder { padding: 16px 14px; color: var(--muted); font-size: 13.5px; }
-  .error { color: var(--err); white-space: pre-wrap; }
-  .placeholder { text-align: center; padding: 44px 20px; }
-  details { border-top: 1px solid var(--line); }
-  details > summary { padding: 9px 14px; cursor: pointer; font-size: 12.5px; color: var(--muted); user-select: none; }
-  details pre {
-    margin: 0; padding: 12px 14px; background: var(--code-bg); overflow: auto; max-height: 380px;
-    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  .issues { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--warn); }
-  .issues ul { margin: 6px 0 0; padding-left: 18px; }
 
-  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
-  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 650; }
-  .pairs { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
-  .pair { display: grid; gap: 2px; }
-  .pair .k { font-size: 11.5px; color: var(--muted); font-weight: 500; }
-  .pair .v { font-size: 14px; font-variant-numeric: tabular-nums; }
-  .stats { display: flex; gap: 26px; flex-wrap: wrap; }
-  .stat-big { display: grid; gap: 2px; }
-  .stat-big .n { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
-  .stat-big .l { font-size: 12px; color: var(--muted); }
-  .banner {
-    padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--warn);
-    color: var(--warn); font-size: 13.5px; margin-bottom: 16px;
+  /* One chip pattern for every status, filled rather than outlined so the
+     colour actually registers. */
+  .tag {
+    font-size: var(--fs-micro); font-weight: 600; padding: 3px 8px; border-radius: var(--r-sm);
+    background: var(--sunk); color: var(--muted); letter-spacing: 0.02em; white-space: nowrap;
   }
+  .tag.ok { background: var(--ok-soft); color: var(--ok); }
+  .tag.bad { background: var(--alert-soft); color: var(--alert); }
+  .tag.warn { background: var(--accent-soft); color: var(--accent); }
+
+  .items { list-style: none; margin: 0; padding: 0; max-height: 440px; overflow: auto; }
+  .items li { padding: 12px 18px; border-bottom: 1px solid var(--line); display: grid; gap: 5px; }
+  .items li:last-child { border-bottom: 0; }
+  .row1 { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .row1 strong { font-weight: 600; }
+  .row1 .sub { color: var(--muted); font-size: var(--fs-small); }
+  .row2 { color: var(--muted); font-size: var(--fs-small); display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  code.mbid { font: var(--fs-micro)/1 var(--mono); color: var(--muted); }
+
+  .empty, .error { padding: 18px; color: var(--muted); font-size: var(--fs-body); }
+  .error { color: var(--alert); white-space: pre-wrap; }
+  details { border-top: 1px solid var(--line); }
+  details > summary { padding: 10px 18px; cursor: pointer; font-size: var(--fs-small); color: var(--muted); user-select: none; }
+  details pre {
+    margin: 0; padding: 14px 18px; background: var(--sunk); overflow: auto; max-height: 380px;
+    font: var(--fs-micro)/1.6 var(--mono);
+  }
+  .issues { padding: 12px 18px; border-top: 1px solid var(--line); font-size: var(--fs-small); color: var(--ink); }
+  .issues ul { margin: 6px 0 0; padding-left: 18px; color: var(--muted); }
+
+  .cards { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .card { padding: 18px; }
+  .card h2 { margin: 0 0 14px; font-size: var(--fs-h2); font-weight: 600; }
+  .stats { display: flex; gap: 32px; flex-wrap: wrap; }
+  .banner {
+    padding: 14px 18px; border-radius: var(--r-md); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent); background: var(--panel); box-shadow: var(--shadow);
+    font-size: var(--fs-body); margin-bottom: 20px;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
 <header>
-  <h1>lidarr-metadata-provider</h1>
-  <div role="tablist" aria-label="Views">
-    <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Search</button>
-    <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
+  <div class="wrap">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="12" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+        <circle cx="16" cy="16" r="3.5" fill="var(--accent)"/>
+      </svg>
+      <h1>Metadata Provider</h1>
+      <span class="ver" id="version">-</span>
+    </div>
+    <div role="tablist" aria-label="Views">
+      <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Search</button>
+      <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
+    </div>
+    <div class="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">checking</span>
+    </div>
   </div>
-  <span class="live-pill">Live lookups: <b id="live-state">...</b></span>
 </header>
 
-<main>
+<main class="wrap">
   <section role="tabpanel" id="panel-search" aria-labelledby="tab-search">
     <form id="f">
-      <label>Look up
+      <label><span class="lbl">Look up</span>
         <select id="mode">
           <option value="artist">Artists</option>
           <option value="album">Albums</option>
@@ -170,18 +273,16 @@
           <option value="album-id">Album by ID</option>
         </select>
       </label>
-      <label id="l-query"><span id="query-label">Search for</span>
+      <label id="l-query"><span class="lbl" id="query-label">Search for</span>
         <input type="text" id="query" placeholder="radiohead" autocomplete="off" autofocus>
       </label>
-      <label id="l-artist">Artist
+      <label id="l-artist"><span class="lbl">Artist</span>
         <input type="text" id="artist" placeholder="Optional" autocomplete="off">
       </label>
       <span class="check"><input type="checkbox" id="compare" checked> Compare with official service</span>
       <button type="submit" class="go" id="go">Search</button>
     </form>
-    <div id="out">
-      <p class="placeholder">Run a search to compare this server with the official Lidarr service.</p>
-    </div>
+    <div id="out" aria-live="polite" aria-busy="false"></div>
   </section>
 
   <section role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
@@ -201,17 +302,31 @@ function bytes(v) {
 }
 function num(v) { return (v ?? 0).toLocaleString(); }
 
-/* Tabs */
-for (const [tab, panel] of [["tab-search", "panel-search"], ["tab-db", "panel-db"]]) {
-  $(tab).addEventListener("click", () => {
-    for (const [t, p] of [["tab-search", "panel-search"], ["tab-db", "panel-db"]]) {
-      const on = t === tab;
-      $(t).setAttribute("aria-selected", String(on));
-      $(p).hidden = !on;
-    }
-    if (panel === "panel-db") loadDatabase();
-  });
+/* Tabs. Arrow keys move between them and only the active tab is in the tab
+   order, which is what the tablist role promises a screen reader. */
+const TABS = [["tab-search", "panel-search"], ["tab-db", "panel-db"]];
+
+function selectTab(tab, focus) {
+  for (const [t, p] of TABS) {
+    const on = t === tab;
+    $(t).setAttribute("aria-selected", String(on));
+    $(t).tabIndex = on ? 0 : -1;
+    $(p).hidden = !on;
+  }
+  if (focus) $(tab).focus();
+  if (tab === "tab-db") loadDatabase();
 }
+
+TABS.forEach(([tab], i) => {
+  $(tab).tabIndex = i === 0 ? 0 : -1;
+  $(tab).addEventListener("click", () => selectTab(tab));
+  $(tab).addEventListener("keydown", (e) => {
+    const step = { ArrowRight: 1, ArrowLeft: -1, Home: -i, End: TABS.length - 1 - i }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    selectTab(TABS[(i + step + TABS.length) % TABS.length][0], true);
+  });
+});
 
 function syncFields() {
   const mode = $("mode").value;
@@ -224,14 +339,25 @@ $("mode").addEventListener("change", syncFields);
 syncFields();
 
 let liveLookups = false;
+let lastStatus = null;
+
 async function refreshPill() {
   try {
     const s = await (await fetch("/ui/status")).json();
+    lastStatus = s;
     liveLookups = !!(s.fallback && s.fallback.enabled);
-    $("live-state").textContent = liveLookups ? "On" : "Off";
-  } catch (e) { $("live-state").textContent = "unknown"; }
+    $("version").textContent = s.version || "-";
+
+    const local = s.dataset && s.dataset.present;
+    $("status-dot").className = "dot " + (local ? "local" : liveLookups ? "live" : "");
+    $("status-text").textContent = local
+      ? (liveLookups ? "Local database, live lookups on" : "Local database")
+      : liveLookups ? "Live lookups only" : "No source";
+  } catch (e) {
+    $("status-dot").className = "dot";
+    $("status-text").textContent = "unreachable";
+  }
 }
-refreshPill();
 
 /* ---- Search ---- */
 function deltaCell(localV, officialV, betterIsLower) {
@@ -301,7 +427,7 @@ function renderPane(r, kind) {
   const badge = r.error ? `<span class="tag bad">Error</span>`
     : r.formatOk ? `<span class="tag ok">Lidarr can read this</span>`
     : `<span class="tag bad">Lidarr may reject this (${r.formatIssues.length})</span>`;
-  return `<section class="pane ${kind}">
+  return `<section class="panel pane ${kind}">
     <h2>${esc(r.label)}</h2>
     <p class="origin">${esc(r.origin)}</p>
     <div class="bar">${badge}
@@ -314,13 +440,57 @@ function renderPane(r, kind) {
   </section>`;
 }
 
+const EXAMPLES = ["radiohead", "the beatles", "bjork", "aphex twin", "johann sebastian bach"];
+
+// Shown on load and whenever there is nothing else to show. Every self hosted
+// tool worth trusting proves it is alive before you interact with it.
+function renderIdle() {
+  const ds = (lastStatus && lastStatus.dataset) || {};
+  const m = (lastStatus && lastStatus.metrics) || {};
+
+  const contents = ds.present
+    ? `<div class="facts">
+         <div class="fact"><span class="lbl">Artists</span><span class="v big">${num(ds.artists)}</span></div>
+         <div class="fact"><span class="lbl">Albums</span><span class="v big">${num(ds.albums)}</span></div>
+       </div>`
+    : `<p class="empty" style="padding:0">No local database. Requests are answered by live
+       MusicBrainz lookups, which are slower and paced at one per second.</p>`;
+
+  $("out").innerHTML = `<div class="idle">
+    <section class="panel">
+      <h2>Database</h2>
+      ${contents}
+      <div class="facts" style="margin-top:14px">
+        <div class="fact"><span class="lbl">Snapshot</span><span class="v">${esc(ds.exportTimestamp ? dateText(ds.exportTimestamp) : "none")}</span></div>
+        <div class="fact"><span class="lbl">Served</span><span class="v">${num(m.requests)} requests</span></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Try a search</h2>
+      <div class="chips">${EXAMPLES.map((q) =>
+        `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+      <p style="margin:16px 0 0;font-size:var(--fs-small);color:var(--muted)">Each search runs against this
+        server and the official service at the same time, so you can see where they differ.</p>
+    </section>
+  </div>`;
+
+  for (const b of $("out").querySelectorAll(".chip")) {
+    b.addEventListener("click", () => {
+      $("mode").value = "artist"; syncFields();
+      $("query").value = b.dataset.q;
+      $("f").requestSubmit();
+    });
+  }
+}
+
 $("f").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("query").value.trim();
   if (!q) return;
   $("go").disabled = true;
-  $("out").innerHTML = `<p class="placeholder">Searching${liveLookups
-    ? "<br>This can take a few seconds. Live lookups are paced to avoid overloading MusicBrainz." : ""}</p>`;
+  $("out").setAttribute("aria-busy", "true");
+  $("out").innerHTML = `<div class="verdict"><strong>Searching</strong>${liveLookups
+    ? `<span class="stat">Live lookups are paced to one per second, so this can take a few seconds</span>` : ""}</div>`;
 
   const params = new URLSearchParams({
     mode: $("mode").value, query: q, artist: $("artist").value.trim(),
@@ -340,12 +510,15 @@ $("f").addEventListener("submit", async (e) => {
       + (d.official ? renderPane(d.official, "official") : "") + `</div>`;
     $("out").innerHTML = html;
   } catch (err) {
-    $("out").innerHTML = `<section class="pane"><p class="error">${esc(err)}</p></section>`;
+    $("out").innerHTML = `<section class="panel pane"><p class="error">${esc(err)}</p></section>`;
   } finally {
     $("go").disabled = false;
+    $("out").setAttribute("aria-busy", "false");
     refreshPill();
   }
 });
+
+refreshPill().then(renderIdle);
 
 /* ---- Database ---- */
 function ago(iso) {
@@ -396,18 +569,18 @@ async function loadDatabase() {
        while serving.</p>`;
 
   $("db").innerHTML = banner + `<div class="cards">
-    <section class="card"><h2>Database</h2><div class="pairs">
+    <section class="panel card"><h2>Database</h2><div class="pairs">
       <div class="pair"><span class="k">MusicBrainz snapshot</span><span class="v">${esc(ds.exportTimestamp ? dateText(ds.exportTimestamp) : "None installed")}</span></div>
       <div class="pair"><span class="k">Installed here</span><span class="v">${esc(ds.installedAt ? dateText(ds.installedAt) : "Not installed")}</span></div>
       <div class="pair"><span class="k">Next update check</span><span class="v">${esc(ds.nextCheck ? dateText(ds.nextCheck) : "Manual updates only")}</span></div>
       <div class="pair"><span class="k">Server version</span><span class="v">${esc(s.version || "-")}</span></div>
     </div></section>
 
-    <section class="card"><h2>Contents</h2>${counts}</section>
+    <section class="panel card"><h2>Contents</h2>${counts}</section>
 
-    <section class="card"><h2>Live MusicBrainz lookups</h2>${fallbackCard}</section>
+    <section class="panel card"><h2>Live MusicBrainz lookups</h2>${fallbackCard}</section>
 
-    <section class="card"><h2>Serving</h2><div class="pairs">
+    <section class="panel card"><h2>Serving</h2><div class="pairs">
       <div class="pair"><span class="k">Requests served</span><span class="v">${num(m.requests)}</span></div>
       <div class="pair"><span class="k">Errors</span><span class="v">${num(m.errors)}</span></div>
       <div class="pair"><span class="k">Median response</span><span class="v">${ms(m.medianMs || 0)}</span></div>
