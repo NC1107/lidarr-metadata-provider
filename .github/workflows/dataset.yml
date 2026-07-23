@@ -272,7 +272,14 @@ jobs:
           if ! gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"; then
             gh release edit "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"
           fi
-          gh release upload "$TAG" release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256 --clobber
+          # --clobber deletes each existing asset by id before re-uploading, and
+          # that delete can 404 on a stale id when re-publishing over a release
+          # that already has assets. Remove any prior dataset assets explicitly
+          # (tolerating a miss), then upload fresh.
+          for a in $(gh release view "$TAG" --json assets -q '.assets[].name' | grep '^dataset\.db' || true); do
+            gh release delete-asset "$TAG" "$a" -y || true
+          done
+          gh release upload "$TAG" release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256
 
       - name: Build log
         if: always()
