@@ -259,6 +259,7 @@ func toArtistAlbum(rg *mbReleaseGroup, statuses []string) skyhook.ArtistAlbumRes
 // is not something Lidarr can grab.
 func toAlbum(rg *mbReleaseGroup, releases []mbRelease) skyhook.AlbumResource {
 	artists := make([]skyhook.AlbumArtistResource, 0, len(rg.ArtistCredit))
+	present := map[string]bool{}
 	artistID := ""
 	for _, credit := range rg.ArtistCredit {
 		if credit.Artist == nil {
@@ -267,7 +268,30 @@ func toAlbum(rg *mbReleaseGroup, releases []mbRelease) skyhook.AlbumResource {
 		if artistID == "" {
 			artistID = credit.Artist.ID
 		}
-		artists = append(artists, toAlbumArtist(credit.Artist))
+		if !present[credit.Artist.ID] {
+			present[credit.Artist.ID] = true
+			artists = append(artists, toAlbumArtist(credit.Artist))
+		}
+	}
+	// Every artist a track credits must appear in the album's artist list, or
+	// Lidarr throws a KeyNotFoundException and discards the whole album. Guest
+	// performers are credited per track rather than on the release group, and a
+	// brand-new release with a guest verse is exactly what the fallback exists
+	// to serve, so the dataset build's safeguard has to hold here too. The
+	// track credit already carries the full artist, so no extra lookup is
+	// needed.
+	for i := range releases {
+		for j := range releases[i].Media {
+			for k := range releases[i].Media[j].Tracks {
+				for _, c := range trackCredits(&releases[i].Media[j].Tracks[k]) {
+					if c.Artist == nil || present[c.Artist.ID] {
+						continue
+					}
+					present[c.Artist.ID] = true
+					artists = append(artists, toAlbumArtist(c.Artist))
+				}
+			}
+		}
 	}
 
 	mapped := make([]skyhook.ReleaseResource, 0, len(releases))
@@ -351,6 +375,19 @@ func toRelease(r *mbRelease) skyhook.ReleaseResource {
 	}
 }
 
+// trackCredits returns the artist credits that attribute a track: its own if
+// present, otherwise the recording's. Used both to set a track's artist and to
+// complete the album's artist list, so the two never disagree.
+func trackCredits(t *mbTrack) []mbArtistCredit {
+	if len(t.ArtistCredit) > 0 {
+		return t.ArtistCredit
+	}
+	if t.Recording != nil {
+		return t.Recording.ArtistCredit
+	}
+	return nil
+}
+
 func toTrack(t *mbTrack, mediumNumber int) skyhook.TrackResource {
 	track := skyhook.TrackResource{
 		ID:              t.ID,
@@ -362,7 +399,6 @@ func toTrack(t *mbTrack, mediumNumber int) skyhook.TrackResource {
 		MediumNumber:    mediumNumber,
 		DurationMs:      t.Length,
 	}
-	credits := t.ArtistCredit
 	if t.Recording != nil {
 		track.RecordingID = t.Recording.ID
 		if track.TrackName == "" {
@@ -371,11 +407,8 @@ func toTrack(t *mbTrack, mediumNumber int) skyhook.TrackResource {
 		if track.DurationMs == nil {
 			track.DurationMs = t.Recording.Length
 		}
-		if len(credits) == 0 {
-			credits = t.Recording.ArtistCredit
-		}
 	}
-	for _, c := range credits {
+	for _, c := range trackCredits(t) {
 		if c.Artist != nil {
 			track.ArtistID = c.Artist.ID
 			break
