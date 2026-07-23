@@ -382,7 +382,7 @@ func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumR
 		ArtistID:        artistID,
 		Artists:         artists,
 		Genres:          c.genresFor(c.groupTags[g.id]),
-		Images:          []skyhook.ImageResource{},
+		Images:          c.coverFor(g),
 		Links:           c.linksFor(c.groupURLs[g.id]),
 		Rating:          skyhook.RatingResource{},
 		Releases:        releases,

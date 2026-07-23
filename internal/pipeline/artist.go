@@ -77,10 +77,17 @@ type Emitter struct {
 // stagingPath names scratch space for the release, medium and track rows that
 // album assembly joins over. It is several gigabytes and removed when the
 // build finishes.
-func BuildAll(core, derived *mbdump.Archive, stagingPath string, emit Emitter) error {
+func BuildAll(core, derived, coverArt *mbdump.Archive, stagingPath string, emit Emitter) error {
 	c, err := scan(core, derived, nil, stagingPath)
 	if err != nil {
 		return err
+	}
+	// Cover art is a third archive and optional; without it albums simply
+	// carry no images, which is valid.
+	if coverArt != nil {
+		if err := coverArt.ReadTables(c.coverArtHandlers()); err != nil {
+			return err
+		}
 	}
 	defer c.staging.close()
 
@@ -231,6 +238,19 @@ type collector struct {
 	urls       map[int]string
 	artistURLs map[int][]int
 	groupURLs  map[int][]int
+
+	// Only URLs and tags actually referenced are kept, which is a small slice
+	// of the tens of millions in the export. neededURLs and neededTags are
+	// built by the link and tag handlers, and read by the url and tag
+	// handlers, which the archive orders later. urlPhase and tagPhase catch a
+	// reordering that would otherwise silently drop every link or genre.
+	neededURLs map[int]bool
+	neededTags map[int]bool
+	urlPhase   bool
+	tagPhase   bool
+
+	// Release groups that have a Cover Art Archive cover.
+	groupHasCover map[int]bool
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -260,6 +280,9 @@ func newCollector(want map[string]bool) *collector {
 		urls:           map[int]string{},
 		artistURLs:     map[int][]int{},
 		groupURLs:      map[int][]int{},
+		neededURLs:     map[int]bool{},
+		neededTags:     map[int]bool{},
+		groupHasCover:  map[int]bool{},
 	}
 }
 

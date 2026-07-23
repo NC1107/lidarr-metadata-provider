@@ -104,9 +104,20 @@ func buildAlbums(t *testing.T) map[string]*skyhook.AlbumResource {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A cover-art archive marking release group 50 (the self-titled album) as
+	// having a cover.
+	caTables := map[string]string{
+		"cover_art_archive.release_group_cover_art": row(mbdump.ReleaseGroupCoverArtColumns,
+			map[int]string{mbdump.ReleaseGroupCoverArtGroup: "50"}),
+	}
+	coverArt, err := mbdump.Open(fakeExport(t,
+		[]string{"cover_art_archive.release_group_cover_art"}, caTables))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	out := map[string]*skyhook.AlbumResource{}
-	err = BuildAll(core, derived, filepath.Join(t.TempDir(), "staging.db"), Emitter{
+	err = BuildAll(core, derived, coverArt, filepath.Join(t.TempDir(), "staging.db"), Emitter{
 		Artist: func(*skyhook.ArtistResource) error { return nil },
 		Album:  func(a *skyhook.AlbumResource) error { out[a.ID] = a; return nil },
 	})
@@ -225,5 +236,28 @@ func TestBuiltAlbumMatchesTheContract(t *testing.T) {
 	}
 	if len(diffs) > 0 {
 		t.Errorf("built album drifted from the contract: %v", diffs)
+	}
+}
+
+// A release group in the cover art archive carries a deterministic Cover Art
+// Archive image; one that is not stays imageless.
+func TestBuildAlbumCoverArt(t *testing.T) {
+	albums := buildAlbums(t)
+
+	withArt := albums[albumGID]
+	if len(withArt.Images) != 1 {
+		t.Fatalf("album with a cover got %d images", len(withArt.Images))
+	}
+	img := withArt.Images[0]
+	if img.CoverType != "Cover" {
+		t.Errorf("CoverType = %q", img.CoverType)
+	}
+	if img.URL != "https://coverartarchive.org/release-group/"+albumGID+"/front-500" {
+		t.Errorf("image URL = %q", img.URL)
+	}
+
+	// The live album (group 51) is not in the cover art archive.
+	if got := len(albums[liveGID].Images); got != 0 {
+		t.Errorf("album with no cover got %d images", got)
 	}
 }

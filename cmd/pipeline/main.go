@@ -64,7 +64,11 @@ func run(args []string) error {
 		if len(args) < 4 {
 			return usage()
 		}
-		return buildDataset(args[1], args[2], args[3])
+		coverArt := ""
+		if len(args) > 4 {
+			coverArt = args[4]
+		}
+		return buildDataset(args[1], args[2], args[3], coverArt)
 	case "build-artist":
 		if len(args) < 4 {
 			return usage()
@@ -91,10 +95,10 @@ func usage() error {
       artifact is downloaded by every user, so knowing which entity is
       responsible for its bulk decides whether anything is worth changing.
 
-  pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db>
+  pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db> [cover-art.tar.bz2]
       Build the full dataset the server loads. Reads each archive once and
-      streams artists into the output, so it is bounded by the join tables
-      rather than by the number of payloads produced.
+      streams artists into the output. The cover art archive is optional;
+      with it, albums carry Cover Art Archive artwork.
 
   pipeline build-artist <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <mbid>...
       Build artist payloads straight from the export and print them. Both
@@ -266,7 +270,7 @@ func verify(manifestPath string, files []string) error {
 }
 
 // buildDataset produces the file the server loads.
-func buildDataset(corePath, derivedPath, outPath string) error {
+func buildDataset(corePath, derivedPath, outPath, coverArtPath string) error {
 	core, err := mbdump.Open(corePath)
 	if err != nil {
 		return err
@@ -274,6 +278,12 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 	derived, err := mbdump.Open(derivedPath)
 	if err != nil {
 		return err
+	}
+	var coverArt *mbdump.Archive
+	if coverArtPath != "" {
+		if coverArt, err = mbdump.Open(coverArtPath); err != nil {
+			return err
+		}
 	}
 	info, err := core.Info()
 	if err != nil {
@@ -303,7 +313,7 @@ func buildDataset(corePath, derivedPath, outPath string) error {
 	}
 
 	staging := outPath + ".staging"
-	err = pipeline.BuildAll(core, derived, staging, pipeline.Emitter{
+	err = pipeline.BuildAll(core, derived, coverArt, staging, pipeline.Emitter{
 		Artist: func(a *skyhook.ArtistResource) error {
 			artistsWritten++
 			progress("artists", artistsWritten)

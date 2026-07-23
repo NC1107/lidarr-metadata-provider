@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -39,11 +40,16 @@ func (c *collector) readTag(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("tag", row, mbdump.TagColumns); err != nil {
 		return err
 	}
+	c.tagPhase = true
 	id, err := atoi(row[mbdump.TagID])
 	if err != nil {
 		return err
 	}
-	c.tagNames[id] = row[mbdump.TagName].Value
+	// Keep only tags something we emit was tagged with. Most tags in the
+	// export apply to entities this dataset does not carry.
+	if c.neededTags[id] {
+		c.tagNames[id] = row[mbdump.TagName].Value
+	}
 	return nil
 }
 
@@ -69,7 +75,20 @@ func (c *collector) readArtistTag(row []mbdump.Field) error {
 	if count <= 0 {
 		return nil
 	}
+	if err := c.needTag(tag); err != nil {
+		return err
+	}
 	c.artistTags[artist] = append(c.artistTags[artist], weightedTag{tag, count})
+	return nil
+}
+
+// needTag records a referenced tag, refusing if the tag table has already
+// been read: filtering it then would have dropped this reference.
+func (c *collector) needTag(id int) error {
+	if c.tagPhase {
+		return fmt.Errorf("tag table was read before the tag join tables; genres would be dropped")
+	}
+	c.neededTags[id] = true
 	return nil
 }
 
@@ -89,6 +108,9 @@ func (c *collector) readReleaseGroupTag(row []mbdump.Field) error {
 	if count <= 0 {
 		return nil
 	}
+	if err := c.needTag(tag); err != nil {
+		return err
+	}
 	c.groupTags[rg] = append(c.groupTags[rg], weightedTag{tag, count})
 	return nil
 }
@@ -97,11 +119,26 @@ func (c *collector) readURL(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("url", row, mbdump.URLColumns); err != nil {
 		return err
 	}
+	c.urlPhase = true
 	id, err := atoi(row[mbdump.URLID])
 	if err != nil {
 		return err
 	}
-	c.urls[id] = row[mbdump.URLValue].Value
+	// Keep only URLs an artist or release group links to. Most URLs in the
+	// export are on recordings, releases and labels this dataset omits.
+	if c.neededURLs[id] {
+		c.urls[id] = row[mbdump.URLValue].Value
+	}
+	return nil
+}
+
+// needURL records a referenced url, refusing if the url table has already
+// been read: filtering it then would have dropped this link.
+func (c *collector) needURL(id int) error {
+	if c.urlPhase {
+		return fmt.Errorf("url table was read before the link tables; links would be dropped")
+	}
+	c.neededURLs[id] = true
 	return nil
 }
 
@@ -117,6 +154,9 @@ func (c *collector) readArtistURL(row []mbdump.Field) error {
 		return nil
 	}
 	url, _ := optInt(row[mbdump.LinkURLEntity1])
+	if err := c.needURL(url); err != nil {
+		return err
+	}
 	c.artistURLs[artist] = append(c.artistURLs[artist], url)
 	return nil
 }
@@ -133,6 +173,9 @@ func (c *collector) readReleaseGroupURL(row []mbdump.Field) error {
 		return nil
 	}
 	url, _ := optInt(row[mbdump.LinkURLEntity1])
+	if err := c.needURL(url); err != nil {
+		return err
+	}
 	c.groupURLs[rg] = append(c.groupURLs[rg], url)
 	return nil
 }
@@ -234,4 +277,42 @@ func isPublicSuffix(s string) bool {
 		return true
 	}
 	return false
+}
+
+// coverArtHandlers reads the cover art archive. Only which release groups have
+// a cover is needed: the image URL is derived from the MBID.
+func (c *collector) coverArtHandlers() map[string]mbdump.RowFunc {
+	return map[string]mbdump.RowFunc{
+		"cover_art_archive.release_group_cover_art": c.readCoverArt,
+	}
+}
+
+func (c *collector) readCoverArt(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("release_group_cover_art", row, mbdump.ReleaseGroupCoverArtColumns); err != nil {
+		return err
+	}
+	rg, err := atoi(row[mbdump.ReleaseGroupCoverArtGroup])
+	if err != nil {
+		return err
+	}
+	if _, ok := c.groups[rg]; ok {
+		c.groupHasCover[rg] = true
+	}
+	return nil
+}
+
+// coverFor renders an album's artwork. The Cover Art Archive serves a release
+// group's chosen cover at a URL built from its MBID, so no per-image data is
+// stored. Url and RemoteURL are the same address because, unlike upstream, we
+// do not run an image cache to sit in front of it.
+func (c *collector) coverFor(g *groupRow) []skyhook.ImageResource {
+	if !c.groupHasCover[g.id] {
+		return []skyhook.ImageResource{}
+	}
+	base := "https://coverartarchive.org/release-group/" + g.gid
+	return []skyhook.ImageResource{{
+		CoverType: "Cover",
+		URL:       base + "/front-500",
+		RemoteURL: base + "/front-500",
+	}}
 }

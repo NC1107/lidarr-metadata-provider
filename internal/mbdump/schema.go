@@ -181,6 +181,12 @@ const (
 	URLColumns = 5
 	URLID      = 0
 	URLValue   = 2
+
+	// release_group_cover_art records which release groups have a chosen
+	// cover. Its presence is all we need: the Cover Art Archive URL is
+	// deterministic from the release group's MBID.
+	ReleaseGroupCoverArtColumns = 2
+	ReleaseGroupCoverArtGroup   = 0
 )
 
 // CheckColumns verifies a row has the expected width, naming the table so a
