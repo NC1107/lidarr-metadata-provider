@@ -273,7 +273,9 @@ func (s *Server) queryOfficial(r *http.Request, mode, query, artist string) side
 		return res
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	// Bound the read of a third party's response, the one HTTP read in the
+	// server that faces outward; a Lidarr JSON payload is comfortably under this.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	res.Took = time.Since(start).Milliseconds()
 
 	switch {

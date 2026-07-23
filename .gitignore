@@ -16,6 +16,7 @@
 *.db-shm
 *.db-wal
 *.sqlite
+*.db.building
 
 # Build-time enrichment cache: image and biography data harvested from
 # Wikidata and Wikipedia. Large, reproducible, and refreshed incrementally, so

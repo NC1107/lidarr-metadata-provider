@@ -26,9 +26,10 @@ const compressionLevel = zstd.SpeedBetterCompression
 // Writer builds a dataset file. It is not safe for concurrent use; a build is
 // a single sequential job by design.
 type Writer struct {
-	db   *sql.DB
-	tx   *sql.Tx
-	path string
+	db       *sql.DB
+	tx       *sql.Tx
+	path     string
+	building string
 
 	insertArtist *sql.Stmt
 	insertAlbum  *sql.Stmt
@@ -49,12 +50,17 @@ type Writer struct {
 // committing each row separately is slower by orders of magnitude.
 const batchSize = 20_000
 
-// Create starts a new dataset at path, replacing anything already there.
+// Create starts a new dataset for path. The build happens in a sibling
+// ".building" file and is renamed over path only once Finish succeeds, so a
+// build that fails partway (an encoding error, a full disk) leaves the previous
+// working dataset in place rather than destroying a multi-hour artifact, the
+// same discipline the download path already follows.
 func Create(path string) (*Writer, error) {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	building := path + ".building"
+	if err := os.Remove(building); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", building)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +79,7 @@ func Create(path string) (*Writer, error) {
 		return nil, err
 	}
 
-	w := &Writer{db: db, path: path, enc: enc}
+	w := &Writer{db: db, path: path, building: building, enc: enc}
 	if err := w.begin(); err != nil {
 		db.Close()
 		return nil, err
@@ -244,7 +250,12 @@ func (w *Writer) Finish(exportStamp string, replicationSeq int) error {
 		return fmt.Errorf("dataset: vacuum: %w", err)
 	}
 	w.enc.Close()
-	return w.db.Close()
+	if err := w.db.Close(); err != nil {
+		return err
+	}
+	// The build is complete and consistent; only now replace the previous
+	// dataset with it.
+	return os.Rename(w.building, w.path)
 }
 
 // SetDictionary switches encoding to use a trained dictionary and records it

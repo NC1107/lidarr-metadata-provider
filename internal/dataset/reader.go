@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -49,6 +50,9 @@ func Open(path string) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Cap the connection pool so a burst of concurrent lookups cannot open an
+	// unbounded number of handles to the immutable file.
+	db.SetMaxOpenConns(runtime.NumCPU() * 4)
 	r := &Reader{db: db}
 	if r.info, err = r.readInfo(); err != nil {
 		db.Close()

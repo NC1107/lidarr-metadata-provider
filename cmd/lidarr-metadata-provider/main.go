@@ -153,9 +153,14 @@ func run() error {
 	})
 
 	httpServer := &http.Server{
-		Addr:              *addr,
-		Handler:           srv.Handler(),
+		Addr:    *addr,
+		Handler: srv.Handler(),
+		// ReadHeaderTimeout stops a slow-header client; WriteTimeout stops one
+		// that reads the response a byte a minute (payloads are precomputed and
+		// small, so 30s is generous); IdleTimeout reaps parked keep-alives.
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

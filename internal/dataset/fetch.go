@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,19 @@ import (
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/checksum"
 )
+
+// fetchClient bounds the transfer without a total deadline (the dataset is
+// multi-gigabyte, so a whole-request timeout is wrong): a connection that fails
+// to connect, hand back headers, or stay alive is cut, and a stalled part is
+// retried by downloadParts.
+var fetchClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   30 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
 
 // Fetch downloads a dataset to dest when it is not already there.
 //
@@ -91,7 +105,7 @@ func fetchManifest(ctx context.Context, url string) (parts []string, found bool,
 	if err != nil {
 		return nil, false, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return nil, false, err
 	}
@@ -138,7 +152,31 @@ func downloadParts(ctx context.Context, url string, parts []string, dest string,
 	var total int64
 	for i, part := range parts {
 		log.Info("downloading dataset part", "part", i+1, "of", len(parts), "name", part)
-		n, err := downloadInto(ctx, base+part, f, log)
+		// Remember where this part starts, so a failed attempt can be rewound
+		// and retried rather than failing the whole multi-gigabyte transfer or
+		// appending a partial part twice. The whole-file checksum is the final
+		// backstop regardless.
+		offset, err := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return total, err
+		}
+		var n int64
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				if _, err := f.Seek(offset, io.SeekStart); err != nil {
+					return total, err
+				}
+				if err := f.Truncate(offset); err != nil {
+					return total, err
+				}
+				log.Info("retrying dataset part", "name", part, "attempt", attempt+1, "err", err)
+				time.Sleep(time.Duration(attempt) * 3 * time.Second)
+			}
+			n, err = downloadInto(ctx, base+part, f, log)
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
 			return total, fmt.Errorf("part %s: %w", part, err)
 		}
@@ -152,7 +190,7 @@ func fetchChecksum(ctx context.Context, url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -193,7 +231,7 @@ func downloadInto(ctx context.Context, url string, w io.Writer, log *slog.Logger
 	if err != nil {
 		return 0, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := fetchClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
