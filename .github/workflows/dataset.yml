@@ -266,20 +266,15 @@ jobs:
           this ships in the same image, see \`docs/BUILDING.md\`.
           EOF
           )"
-          # Create the release if it is new; if it already exists (a corrected
-          # same-day rebuild), refresh its title and notes too, not only its
-          # assets, so a re-publish does not leave the superseded stamp showing.
-          if ! gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"; then
-            gh release edit "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"
-          fi
-          # --clobber deletes each existing asset by id before re-uploading, and
-          # that delete can 404 on a stale id when re-publishing over a release
-          # that already has assets. Remove any prior dataset assets explicitly
-          # (tolerating a miss), then upload fresh.
-          for a in $(gh release view "$TAG" --json assets -q '.assets[].name' | grep '^dataset\.db' || true); do
-            gh release delete-asset "$TAG" "$a" -y || true
-          done
-          gh release upload "$TAG" release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256
+          # Recreate the release from scratch each publish. Re-uploading over
+          # existing assets races GitHub's eventually-consistent asset API
+          # (delete-then-add 404s on a stale id, re-add 422s as "already
+          # exists"); deleting the release and creating it fresh with its assets
+          # sidesteps all of it. The delete keeps the underlying git tag, and
+          # create uploads the parts atomically with the release.
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES" \
+            release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256
 
       - name: Build log
         if: always()
