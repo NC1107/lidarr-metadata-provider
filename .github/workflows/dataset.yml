@@ -7,19 +7,14 @@
 name: dataset
 
 on:
-  # The schedule is deliberately commented out while the pipeline is still
-  # changing. A build costs the better part of an hour of runner time and
-  # pulls 7.4 GB from a donation funded mirror, which is not worth spending
-  # on output we are still validating locally. Uncomment once the dataset
-  # format and contents are settled.
-  #
   # MusicBrainz exports land Wednesday and Saturday around 00:20 UTC. Running
-  # well after gives the mirror time to finish publishing, and the offset
-  # keeps this off the top of the hour, when every other scheduled job on the
-  # planet fires.
-  #
-  # schedule:
-  #   - cron: "37 6 * * 3,6"
+  # well after gives the mirror time to finish publishing, and the offset keeps
+  # this off the top of the hour, when every other scheduled job on the planet
+  # fires. The schedule only polls; the expensive build runs only when the
+  # check job finds an export newer than the latest release (see below), so a
+  # run on an unchanged export costs seconds, not an hour.
+  schedule:
+    - cron: "37 6 * * 3,6"
   workflow_dispatch:
     inputs:
       export:
@@ -34,7 +29,49 @@ permissions:
   contents: write
 
 jobs:
+  # Polls the export mirror and decides whether a build is warranted. This is
+  # the answer to "watch the dump location instead of building on a blind
+  # cron": MusicBrainz has no webhook, so the schedule polls, but it fetches a
+  # one line LATEST file and only lets the build proceed when that export has
+  # no release yet. A manual dispatch always builds.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      stamp: ${{ steps.decide.outputs.stamp }}
+      tag: ${{ steps.decide.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - id: decide
+        run: |
+          set -euo pipefail
+          BASE=https://data.metabrainz.org/pub/musicbrainz/data/fullexport
+          UA="LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
+          STAMP="${{ inputs.export }}"
+          if [ -z "$STAMP" ]; then
+            STAMP=$(curl -fsS -A "$UA" "$BASE/LATEST" | tr -d '\n')
+          fi
+          # The release is tagged by the export's date, matching what is
+          # already published; the time suffix is dropped so a re-published
+          # export does not fork the tag.
+          TAG="dataset-${STAMP%%-*}"
+          echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: building $STAMP"
+          elif gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "$TAG already released; nothing to do"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "New export $STAMP has no release; building"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     # A full build reads two archives and writes tens of millions of staging
     # rows. The job cap is six hours; this leaves room without hiding a hang.
@@ -87,16 +124,11 @@ jobs:
         id: export
         run: |
           set -euo pipefail
+          STAMP="${{ needs.check.outputs.stamp }}"
           BASE=https://data.metabrainz.org/pub/musicbrainz/data/fullexport
-          STAMP="${{ inputs.export }}"
-          if [ -z "$STAMP" ]; then
-            STAMP=$(curl -fsS -A "$UA" "$BASE/LATEST" | tr -d '\n')
-          fi
           echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
           echo "base=$BASE/$STAMP" >> "$GITHUB_OUTPUT"
           echo "Building from $STAMP"
-        env:
-          UA: "LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
 
       - name: Download export
         run: |
@@ -169,7 +201,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="dataset-${{ steps.export.outputs.stamp }}"
+          TAG="${{ needs.check.outputs.tag }}"
           gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$(cat <<EOF
           Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`.
           Enriched with artist images and biographies from Wikidata and Wikipedia; see \`docs/DATA_SOURCES.md\` for provenance and licensing.
