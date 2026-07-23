@@ -62,11 +62,30 @@ To see a table's actual columns before writing anything against them:
 go run ./cmd/pipeline inspect mbdump.tar.bz2 release_group
 ```
 
+## Enrich with images and biographies (optional)
+
+MusicBrainz does not carry artist photos or biographies.
+This step gathers them from Wikidata and Wikipedia, both open data, and writes a file the build folds in.
+It is optional: without it, artists simply have no image or overview, exactly as a dump-only build always did.
+
+```
+go run ./cmd/enrich -out enrich/artists.jsonl -contact you@example.com
+```
+
+The harvest of image and article links is a handful of quick queries.
+The biographies are one fetch per article, so the first run takes a while, but the file is a cache: run it again before your next dump and it keeps every biography whose Wikipedia article has not changed, fetching only what is new.
+Pass `-images-only` to skip the biography fetch and get just the photos.
+
 ## Build the dataset
 
 ```
-go run ./cmd/pipeline build mbdump.tar.bz2 mbdump-derived.tar.bz2 dataset.db
+go run ./cmd/pipeline build mbdump.tar.bz2 mbdump-derived.tar.bz2 dataset.db \
+  mbdump-cover-art-archive.tar.bz2 enrich/artists.jsonl
 ```
+
+The last two arguments are optional.
+The cover art archive gives albums their artwork; the enrichment file gives artists their photo and biography.
+Pass `""` for the cover art slot if you want enrichment but not artwork.
 
 This reads each archive once and writes every artist and album. Expect it to take a while and to want several gigabytes of scratch space next to the output, which is removed when it finishes.
 
