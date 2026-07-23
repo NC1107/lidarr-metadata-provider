@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -231,22 +232,41 @@ func (c *collector) linksFor(urlIDs []int) []skyhook.LinkResource {
 }
 
 // titleCase capitalises each word, matching how upstream renders genre names.
+// A word starts at the beginning and after a space, a hyphen, or an ampersand,
+// so "j-pop" becomes "J-Pop" and "r&b" becomes "R&B", matching the golden
+// fixtures. Splitting only on whitespace left everything after a hyphen or
+// ampersand lowercase.
 func titleCase(s string) string {
-	fields := strings.Fields(s)
-	for i, f := range fields {
-		r := []rune(f)
-		r[0] = []rune(strings.ToUpper(string(r[0])))[0]
-		fields[i] = string(r)
+	var b strings.Builder
+	b.Grow(len(s))
+	wordStart := true
+	for _, r := range s {
+		if wordStart {
+			b.WriteRune(unicode.ToUpper(r))
+		} else {
+			b.WriteRune(r)
+		}
+		wordStart = r == ' ' || r == '-' || r == '&'
 	}
-	return strings.Join(fields, " ")
+	return b.String()
 }
 
-// linkType extracts the second-level domain from a URL, which is the label
-// upstream gives a link. "https://www.discogs.com/artist/1" -> "discogs".
+// linkType extracts the label upstream gives a link, which is the host's
+// second-to-last component: "https://www.discogs.com/artist/1" -> "discogs".
+//
+// The one exception the golden fixtures show is co.uk and co.jp, which upstream
+// strips so bbc.co.uk types as "bbc". It does not strip any other compound
+// suffix: gov.au types as "gov", co.kr as "co", ac.jp as "ac", com.br as "com".
+// An earlier version stripped a broad hardcoded list (gov, com, org, net, ac),
+// which disagreed with upstream on every one of those.
 func linkType(url string) string {
 	host := url
 	if i := strings.Index(host, "://"); i >= 0 {
 		host = host[i+3:]
+	}
+	// Drop any userinfo, so user:pass@example.com reads as example, not user.
+	if i := strings.IndexByte(host, '@'); i >= 0 {
+		host = host[i+1:]
 	}
 	if i := strings.IndexByte(host, '/'); i >= 0 {
 		host = host[:i]
@@ -254,29 +274,18 @@ func linkType(url string) string {
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
-	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	host = strings.Trim(strings.ToLower(host), ".") // tolerate a trailing-dot FQDN
+	host = strings.TrimPrefix(host, "www.")
 
 	parts := strings.Split(host, ".")
 	if len(parts) < 2 {
 		return host
 	}
-	// The second-level label, skipping a country-code suffix like co.uk so
-	// bbc.co.uk types as "bbc" rather than "co".
-	i := len(parts) - 2
-	if len(parts) >= 3 && len(parts[len(parts)-1]) == 2 && isPublicSuffix(parts[len(parts)-2]) {
-		i = len(parts) - 3
+	last := parts[len(parts)-1]
+	if len(parts) >= 3 && parts[len(parts)-2] == "co" && (last == "uk" || last == "jp") {
+		return parts[len(parts)-3]
 	}
-	return parts[i]
-}
-
-// isPublicSuffix covers the common second-level registries that sit under a
-// country code, so the label above them is the recognisable name.
-func isPublicSuffix(s string) bool {
-	switch s {
-	case "co", "com", "org", "net", "gov", "ac":
-		return true
-	}
-	return false
+	return parts[len(parts)-2]
 }
 
 // coverArtHandlers reads the cover art archive. Only which release groups have
