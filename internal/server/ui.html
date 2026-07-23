@@ -637,6 +637,13 @@ function startLive() {
   stopLive();
   liveTimer = setInterval(loadLive, 2000);
 }
+// The identifying part of a request: the query for searches, the MBID for
+// path lookups, which otherwise showed nothing.
+function liveDetail(r) {
+  if (r.query) return decodeURIComponent(r.query);
+  const seg = (r.path || "").split("/").filter(Boolean).pop() || "";
+  return seg.includes("-") ? seg : "";
+}
 async function loadLive() {
   let s;
   try { s = await (await fetch("/ui/status")).json(); }
@@ -650,7 +657,7 @@ async function loadLive() {
       <tbody>${rows.map((r) => `<tr>
         <td class="mono">${esc(r.at)}</td>
         <td class="mono">${esc(r.route)}</td>
-        <td class="mono q">${esc(decodeURIComponent(r.query || ""))}</td>
+        <td class="mono q">${esc(liveDetail(r))}</td>
         <td><span class="tag ${cls(r.status)}">${r.status}</span></td>
         <td class="mono">${bytes(r.bytes)}</td>
         <td class="mono">${ms(r.tookMs)}</td></tr>`).join("")}</tbody></table>`
