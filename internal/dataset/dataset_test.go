@@ -541,3 +541,57 @@ func TestDictBuilderRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Lidarr discards an entire album if any track credits an artist absent from
+// the album's Artists list, so the reader must guarantee that invariant.
+func TestAlbumIncludesEveryTrackArtist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A featured artist stored as its own artist row.
+	feat := &skyhook.ArtistResource{
+		ID: "feat0000-0000-0000-0000-000000000001", OldIDs: []string{},
+		ArtistName: "Guest", SortName: "Guest", ArtistAliases: []string{},
+		Genres: []string{}, Images: []skyhook.ImageResource{}, Links: []skyhook.LinkResource{},
+		Albums: []skyhook.ArtistAlbumResource{},
+	}
+	if err := w.AddArtist(feat); err != nil {
+		t.Fatal(err)
+	}
+	// An album crediting only the primary artist, but with a track by the guest.
+	al := sampleAlbum()
+	al.Releases[0].Tracks[0].ArtistID = feat.ID
+	if err := w.AddAlbum(al); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	got, err := r.Album(context.Background(), al.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := map[string]bool{}
+	for _, a := range got.Artists {
+		present[a.ID] = true
+	}
+	for _, rel := range got.Releases {
+		for _, tr := range rel.Tracks {
+			if tr.ArtistID != "" && !present[tr.ArtistID] {
+				t.Fatalf("track artist %s is not in the album Artists list, Lidarr would discard the album", tr.ArtistID)
+			}
+		}
+	}
+	if !present[feat.ID] {
+		t.Error("the featured artist was not added to Artists")
+	}
+}

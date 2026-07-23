@@ -120,12 +120,56 @@ func (r *Reader) Artist(ctx context.Context, mbid string) (*skyhook.ArtistResour
 }
 
 // Album serves a stored album payload.
+//
+// Before returning it, every artist any track credits is guaranteed to be in
+// the album's Artists list. Lidarr builds a dictionary from that list and
+// looks each track's ArtistId up in it while mapping releases; an id that is
+// missing throws a KeyNotFoundException that discards the entire album. A
+// featured artist on one track is enough to trigger it, so this invariant is
+// not optional.
 func (r *Reader) Album(ctx context.Context, mbid string) (*skyhook.AlbumResource, error) {
 	var out skyhook.AlbumResource
 	if err := r.lookup(ctx, "album", "album_alias_mbid", mbid, &out); err != nil {
 		return nil, err
 	}
+	r.completeAlbumArtists(ctx, &out)
 	return &out, nil
+}
+
+// completeAlbumArtists adds any track artist missing from the album's Artists
+// list, looking each one up in the dataset.
+func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResource) {
+	present := map[string]bool{}
+	for _, ar := range a.Artists {
+		present[ar.ID] = true
+	}
+	for i := range a.Releases {
+		for _, t := range a.Releases[i].Tracks {
+			if t.ArtistID == "" || present[t.ArtistID] {
+				continue
+			}
+			present[t.ArtistID] = true
+			if shape, ok := r.albumArtistShape(ctx, t.ArtistID); ok {
+				a.Artists = append(a.Artists, shape)
+			}
+		}
+	}
+}
+
+// albumArtistShape returns the embedded artist shape for an MBID, or false if
+// the dataset does not have that artist.
+func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.AlbumArtistResource, bool) {
+	full, err := r.Artist(ctx, mbid)
+	if err != nil {
+		return skyhook.AlbumArtistResource{}, false
+	}
+	return skyhook.AlbumArtistResource{
+		ID: full.ID, OldIDs: full.OldIDs, ArtistName: full.ArtistName,
+		SortName: full.SortName, ArtistAliases: full.ArtistAliases,
+		Disambiguation: full.Disambiguation, Overview: full.Overview,
+		Type: full.Type, Status: full.Status, Genres: full.Genres,
+		Images: full.Images, Links: full.Links, Rating: full.Rating,
+	}, true
 }
 
 func (r *Reader) lookup(ctx context.Context, table, aliases, mbid string, into any) error {
