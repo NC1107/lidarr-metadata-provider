@@ -72,16 +72,26 @@ type Emitter struct {
 	Album  func(*skyhook.AlbumResource) error
 }
 
+// ArtistEnrichment is the image and biography for one artist, gathered at build
+// time from Wikidata and Wikipedia because the MusicBrainz export carries
+// neither. Image is a Wikimedia Commons address; Overview is a plain-text
+// summary. Either may be empty.
+type ArtistEnrichment struct {
+	Image    string
+	Overview string
+}
+
 // BuildAll produces every artist and album payload in the export.
 //
 // stagingPath names scratch space for the release, medium and track rows that
 // album assembly joins over. It is several gigabytes and removed when the
 // build finishes.
-func BuildAll(core, derived, coverArt *mbdump.Archive, stagingPath string, emit Emitter) error {
+func BuildAll(core, derived, coverArt *mbdump.Archive, stagingPath string, artistEnrich map[string]ArtistEnrichment, emit Emitter) error {
 	c, err := scan(core, derived, nil, stagingPath)
 	if err != nil {
 		return err
 	}
+	c.artistEnrich = artistEnrich
 	// Cover art is a third archive and optional; without it albums simply
 	// carry no images, which is valid.
 	if coverArt != nil {
@@ -192,6 +202,8 @@ type groupRow struct {
 	firstDay   int
 	hasDate    bool
 	artistIDs  []int
+	rating     *float64
+	ratings    int
 }
 
 type collector struct {
@@ -253,6 +265,10 @@ type collector struct {
 	// group map that lets a release-level cover mark its album.
 	groupHasCover  map[int]bool
 	releaseToGroup map[int]int
+
+	// Artist images and biographies gathered outside the export, keyed by
+	// lowercase MBID. Nil for builds that do not enrich.
+	artistEnrich map[string]ArtistEnrichment
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -519,6 +535,14 @@ func (c *collector) readReleaseGroupMeta(row []mbdump.Field) error {
 	if !ok {
 		return nil
 	}
+	// MusicBrainz stores ratings 0-100; the contract reports 0-10, the same
+	// scaling artist_meta uses.
+	if raw, ok := optInt(row[mbdump.ReleaseGroupMetaRating]); ok {
+		value := float64(raw) / 10
+		g.rating = &value
+	}
+	g.ratings, _ = optInt(row[mbdump.ReleaseGroupMetaRatingCount])
+
 	year, hasYear := optInt(row[mbdump.ReleaseGroupMetaFirstYear])
 	if !hasYear {
 		return nil
@@ -612,6 +636,7 @@ func (c *collector) artist(a *artistRow) *skyhook.ArtistResource {
 		}
 		artist.Genres = c.genresFor(c.artistTags[a.id])
 		artist.Links = c.linksFor(c.artistURLs[a.id])
+		artist.Images, artist.Overview = c.enrichArtist(a.gid)
 
 		for _, gid := range a.groups {
 			g := c.groups[gid]
@@ -622,6 +647,29 @@ func (c *collector) artist(a *artistRow) *skyhook.ArtistResource {
 		})
 		return artist
 	}
+}
+
+// enrichArtist renders an artist's image and biography from the enrichment
+// gathered outside the export. The image is served straight from Wikimedia
+// Commons at a 500px thumbnail: like cover art, no bytes are stored and Url and
+// RemoteUrl are the same address because there is no image cache in front of
+// it.
+func (c *collector) enrichArtist(gid string) ([]skyhook.ImageResource, *string) {
+	e, ok := c.artistEnrich[gid]
+	if !ok {
+		return []skyhook.ImageResource{}, nil
+	}
+	images := []skyhook.ImageResource{}
+	if e.Image != "" {
+		url := e.Image + "?width=500"
+		images = []skyhook.ImageResource{{CoverType: "Poster", URL: url, RemoteURL: url}}
+	}
+	var overview *string
+	if e.Overview != "" {
+		text := e.Overview
+		overview = &text
+	}
+	return images, overview
 }
 
 func (c *collector) album(g *groupRow) skyhook.ArtistAlbumResource {

@@ -17,6 +17,11 @@
 *.db-wal
 *.sqlite
 
+# Build-time enrichment cache: image and biography data harvested from
+# Wikidata and Wikipedia. Large, reproducible, and refreshed incrementally, so
+# it is kept on the build machine rather than committed.
+/enrich/
+
 # Local scratch
 /scratch/
 .env

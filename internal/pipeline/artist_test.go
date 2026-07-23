@@ -178,7 +178,8 @@ func sampleTables() map[string]string {
 		"release_group_meta": strings.Join([]string{
 			row(mbdump.ReleaseGroupMetaColumns, map[int]string{
 				mbdump.ReleaseGroupMetaID: "50", mbdump.ReleaseGroupMetaFirstYear: "1990",
-				mbdump.ReleaseGroupMetaFirstMonth: "10", mbdump.ReleaseGroupMetaFirstDay: "1"}),
+				mbdump.ReleaseGroupMetaFirstMonth: "10", mbdump.ReleaseGroupMetaFirstDay: "1",
+				mbdump.ReleaseGroupMetaRating: "80", mbdump.ReleaseGroupMetaRatingCount: "12"}),
 			// Year only: the contract pads rather than omitting.
 			row(mbdump.ReleaseGroupMetaColumns, map[int]string{
 				mbdump.ReleaseGroupMetaID: "51", mbdump.ReleaseGroupMetaFirstYear: "2008"}),

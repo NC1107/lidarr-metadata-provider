@@ -333,19 +333,6 @@ func (s *trackStream) take(group int) ([]stagedTrack, error) {
 }
 
 func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumResource {
-	artists := make([]skyhook.AlbumArtistResource, 0, len(g.artistIDs))
-	artistID := ""
-	for _, id := range g.artistIDs {
-		a, ok := c.artistsByID[id]
-		if !ok {
-			continue
-		}
-		if artistID == "" {
-			artistID = a.gid
-		}
-		artists = append(artists, c.albumArtist(a))
-	}
-
 	byMedium := map[int][]stagedTrack{}
 	for _, t := range tracks {
 		byMedium[t.medium] = append(byMedium[t.medium], t)
@@ -360,6 +347,27 @@ func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumR
 		}
 		releases = append(releases, c.release(rel, status, byMedium))
 	}
+
+	// The release group's credited artists, plus every per-track artist not
+	// already among them: see completeAlbumArtists for why the omission is
+	// fatal to Lidarr rather than merely incomplete.
+	artists := make([]skyhook.AlbumArtistResource, 0, len(g.artistIDs))
+	present := map[string]bool{}
+	artistID := ""
+	for _, id := range g.artistIDs {
+		a, ok := c.artistsByID[id]
+		if !ok {
+			continue
+		}
+		if artistID == "" {
+			artistID = a.gid
+		}
+		if !present[a.gid] {
+			present[a.gid] = true
+			artists = append(artists, c.albumArtist(a))
+		}
+	}
+	c.completeAlbumArtists(&artists, present, artistID, releases)
 
 	secondary := make([]string, 0, len(g.secondary))
 	for _, id := range g.secondary {
@@ -385,8 +393,43 @@ func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumR
 		Genres:          c.genresFor(c.groupTags[g.id]),
 		Images:          c.coverFor(g),
 		Links:           c.linksFor(c.groupURLs[g.id]),
-		Rating:          skyhook.RatingResource{},
+		Rating:          skyhook.RatingResource{Count: g.ratings, Value: g.rating},
 		Releases:        releases,
+	}
+}
+
+// completeAlbumArtists guarantees every artist a track credits appears in the
+// album's artist list. Lidarr builds a lookup keyed by the album's artists and
+// throws a KeyNotFoundException, discarding the whole album, the moment a track
+// points at an artist the list omits. Featured performers are credited per
+// track rather than on the release group, so without this an album with a
+// guest verse renders as having no tracks at all.
+//
+// A track crediting an artist absent from the export (deleted since the export
+// was cut) is reattributed to an artist that is present, since a dangling
+// reference crashes Lidarr just the same. The server applies the identical
+// safeguard at request time; doing it here as well makes the dataset correct at
+// rest rather than relying on the read path to repair it.
+func (c *collector) completeAlbumArtists(artists *[]skyhook.AlbumArtistResource, present map[string]bool, primary string, releases []skyhook.ReleaseResource) {
+	fallback := primary
+	if !present[fallback] && len(*artists) > 0 {
+		fallback = (*artists)[0].ID
+	}
+	for i := range releases {
+		for j := range releases[i].Tracks {
+			t := &releases[i].Tracks[j]
+			if t.ArtistID == "" || present[t.ArtistID] {
+				continue
+			}
+			if id, ok := c.artistIDByGID[t.ArtistID]; ok {
+				if a := c.artistsByID[id]; a != nil {
+					present[t.ArtistID] = true
+					*artists = append(*artists, c.albumArtist(a))
+					continue
+				}
+			}
+			t.ArtistID = fallback
+		}
 	}
 }
 
@@ -490,6 +533,10 @@ func (c *collector) albumArtist(a *artistRow) skyhook.AlbumArtistResource {
 	if a.embedded != nil {
 		return *a.embedded
 	}
+	// The embedded shape deliberately omits images and overview even for
+	// artists that have them: the fixtures show upstream leaving them out of an
+	// album's artist list to keep album payloads small. The image and
+	// biography belong to the full artist payload only.
 	out := skyhook.AlbumArtistResource{
 		ID:             a.gid,
 		OldIDs:         sortedUnique(a.oldIDs),

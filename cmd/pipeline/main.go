@@ -16,6 +16,7 @@ import (
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/checksum"
 	"github.com/nc1107/lidarr-metadata-provider/internal/dataset"
+	"github.com/nc1107/lidarr-metadata-provider/internal/enrich"
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/pipeline"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -68,7 +69,11 @@ func run(args []string) error {
 		if len(args) > 4 {
 			coverArt = args[4]
 		}
-		return buildDataset(args[1], args[2], args[3], coverArt)
+		enrichPath := ""
+		if len(args) > 5 {
+			enrichPath = args[5]
+		}
+		return buildDataset(args[1], args[2], args[3], coverArt, enrichPath)
 	case "build-artist":
 		if len(args) < 4 {
 			return usage()
@@ -95,10 +100,12 @@ func usage() error {
       artifact is downloaded by every user, so knowing which entity is
       responsible for its bulk decides whether anything is worth changing.
 
-  pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db> [cover-art.tar.bz2]
+  pipeline build <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <out.db> [cover-art.tar.bz2] [enrich.jsonl]
       Build the full dataset the server loads. Reads each archive once and
       streams artists into the output. The cover art archive is optional;
-      with it, albums carry Cover Art Archive artwork.
+      with it, albums carry Cover Art Archive artwork. The enrichment file,
+      produced by the enrich command, is optional; with it, artists carry a
+      photo and biography. Pass "" for cover-art to supply only enrichment.
 
   pipeline build-artist <mbdump.tar.bz2> <mbdump-derived.tar.bz2> <mbid>...
       Build artist payloads straight from the export and print them. Both
@@ -270,7 +277,7 @@ func verify(manifestPath string, files []string) error {
 }
 
 // buildDataset produces the file the server loads.
-func buildDataset(corePath, derivedPath, outPath, coverArtPath string) error {
+func buildDataset(corePath, derivedPath, outPath, coverArtPath, enrichPath string) error {
 	core, err := mbdump.Open(corePath)
 	if err != nil {
 		return err
@@ -284,6 +291,10 @@ func buildDataset(corePath, derivedPath, outPath, coverArtPath string) error {
 		if coverArt, err = mbdump.Open(coverArtPath); err != nil {
 			return err
 		}
+	}
+	artistEnrich, err := loadEnrichment(enrichPath)
+	if err != nil {
+		return err
 	}
 	info, err := core.Info()
 	if err != nil {
@@ -313,7 +324,7 @@ func buildDataset(corePath, derivedPath, outPath, coverArtPath string) error {
 	}
 
 	staging := outPath + ".staging"
-	err = pipeline.BuildAll(core, derived, coverArt, staging, pipeline.Emitter{
+	err = pipeline.BuildAll(core, derived, coverArt, staging, artistEnrich, pipeline.Emitter{
 		Artist: func(a *skyhook.ArtistResource) error {
 			artistsWritten++
 			progress("artists", artistsWritten)
@@ -346,6 +357,29 @@ func buildDataset(corePath, derivedPath, outPath, coverArtPath string) error {
 		time.Since(start).Round(time.Second), humanCount(int(artists)),
 		humanCount(int(albums)), humanCount(int(tracks)), float64(size)/(1<<30))
 	return nil
+}
+
+// loadEnrichment reads the artist image and biography file into the shape the
+// pipeline consumes, keyed by MBID. An empty path yields a nil map, which the
+// build treats as "no enrichment" rather than an error, so a dataset can always
+// be built without it.
+func loadEnrichment(path string) (map[string]pipeline.ArtistEnrichment, error) {
+	if path == "" {
+		return nil, nil
+	}
+	artists, err := enrich.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading enrichment %s: %w", path, err)
+	}
+	out := make(map[string]pipeline.ArtistEnrichment, len(artists))
+	for mbid, a := range artists {
+		if a.Image == "" && a.Overview == "" {
+			continue
+		}
+		out[mbid] = pipeline.ArtistEnrichment{Image: a.Image, Overview: a.Overview}
+	}
+	fmt.Fprintf(os.Stderr, "enrichment: %d artists have an image or biography\n", len(out))
+	return out, nil
 }
 
 func humanCount(n int) string {

@@ -121,7 +121,7 @@ func buildAlbums(t *testing.T) map[string]*skyhook.AlbumResource {
 	}
 
 	out := map[string]*skyhook.AlbumResource{}
-	err = BuildAll(core, derived, coverArt, filepath.Join(t.TempDir(), "staging.db"), Emitter{
+	err = BuildAll(core, derived, coverArt, filepath.Join(t.TempDir(), "staging.db"), nil, Emitter{
 		Artist: func(*skyhook.ArtistResource) error { return nil },
 		Album:  func(a *skyhook.AlbumResource) error { out[a.ID] = a; return nil },
 	})

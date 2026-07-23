@@ -54,11 +54,13 @@ const (
 
 	// release_group_meta carries the first release date, which is what the
 	// contract's ReleaseDate reports.
-	ReleaseGroupMetaColumns    = 7
-	ReleaseGroupMetaID         = 0
-	ReleaseGroupMetaFirstYear  = 2
-	ReleaseGroupMetaFirstMonth = 3
-	ReleaseGroupMetaFirstDay   = 4
+	ReleaseGroupMetaColumns     = 7
+	ReleaseGroupMetaID          = 0
+	ReleaseGroupMetaFirstYear   = 2
+	ReleaseGroupMetaFirstMonth  = 3
+	ReleaseGroupMetaFirstDay    = 4
+	ReleaseGroupMetaRating      = 5
+	ReleaseGroupMetaRatingCount = 6
 
 	// release_group_secondary_type_join
 	ReleaseGroupSecondaryJoinColumns = 3
