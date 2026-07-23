@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -219,23 +220,43 @@ func (s *Server) searchAll(r *http.Request, query string) ([]skyhook.EntityResou
 		return nil, err
 	}
 
+	// Score by how well each result's name matches the query, not by its
+	// position within its own type. Otherwise a query that is clearly an album
+	// title ("good girl gone bad") is buried under two dozen artists that
+	// merely share a word, since Lidarr shows the highest scoring entities
+	// first and both lists previously started at the same score.
+	norm := skyhook.Normalize(query)
 	out := make([]skyhook.EntityResource, 0, len(artists)+len(albums))
 	for i := range artists {
-		out = append(out, skyhook.EntityResource{Score: scoreFor(i), Artist: &artists[i]})
+		out = append(out, skyhook.EntityResource{
+			Score: matchScore(norm, artists[i].ArtistName, i), Artist: &artists[i],
+		})
 	}
 	for i := range albums {
-		out = append(out, skyhook.EntityResource{Score: scoreFor(i), Album: &albums[i]})
+		out = append(out, skyhook.EntityResource{
+			Score: matchScore(norm, albums[i].Title, i), Album: &albums[i],
+		})
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	return out, nil
 }
 
-// scoreFor approximates the upstream score, which counts down from 100 by
-// rank. Lidarr only uses it for ordering.
-func scoreFor(rank int) int {
-	if score := 100 - rank; score > 0 {
-		return score
+// matchScore ranks a result by how closely its name matches the query, so an
+// exact title outranks a fuzzy one regardless of whether it is an artist or an
+// album. rank breaks ties within an equally good match, preserving each
+// source's own ordering.
+func matchScore(normQuery, name string, rank int) int {
+	n := skyhook.Normalize(name)
+	switch {
+	case n == normQuery:
+		return 1000 - rank
+	case strings.HasPrefix(n, normQuery) || strings.HasPrefix(normQuery, n):
+		return 500 - rank
+	case strings.Contains(n, normQuery):
+		return 250 - rank
+	default:
+		return 100 - rank
 	}
-	return 1
 }
 
 // handleRecent answers both recent routes. A dataset that only moves when a

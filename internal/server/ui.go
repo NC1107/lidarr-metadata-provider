@@ -160,7 +160,7 @@ func (s *Server) querySource(r *http.Request, src source.Source, label, origin, 
 		if artists, err = src.SearchArtists(r.Context(), query, 0); err == nil {
 			entities := make([]skyhook.EntityResource, 0, len(artists))
 			for i := range artists {
-				entities = append(entities, skyhook.EntityResource{Score: scoreFor(i), Artist: &artists[i]})
+				entities = append(entities, skyhook.EntityResource{Score: 100 - i, Artist: &artists[i]})
 			}
 			payload = entities
 		}
