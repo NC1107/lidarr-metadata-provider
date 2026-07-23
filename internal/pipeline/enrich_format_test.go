@@ -1,6 +1,71 @@
 package pipeline
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestTitleCaseReproducesEveryFixtureGenre drives the casing rule from the
+// golden captures rather than a hand-picked list: every genre string the live
+// service has ever returned must be reproduced by titleCase(strings.ToLower(g)).
+// This is the guard that was missing when the space-only boundary bug shipped,
+// and it auto-covers any genre a future fixture capture adds.
+func TestTitleCaseReproducesEveryFixtureGenre(t *testing.T) {
+	files, err := filepath.Glob("../../fixtures/v0.4/*.json")
+	if err != nil {
+		t.Fatalf("glob fixtures: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no fixtures found under ../../fixtures/v0.4")
+	}
+	genres := map[string]bool{}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		var v any
+		if err := json.Unmarshal(b, &v); err != nil {
+			continue // not every fixture is entity JSON
+		}
+		collectFixtureGenres(v, genres)
+	}
+	if len(genres) == 0 {
+		t.Fatal("extracted no genres from fixtures")
+	}
+	for g := range genres {
+		if got := titleCase(strings.ToLower(g)); got != g {
+			t.Errorf("titleCase(lower(%q)) = %q, want %q (upstream ground truth)", g, got, g)
+		}
+	}
+}
+
+// collectFixtureGenres walks arbitrary decoded fixture JSON and records every
+// string in any "genres" array, at any nesting depth.
+func collectFixtureGenres(v any, out map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			if strings.EqualFold(k, "genres") {
+				if arr, ok := val.([]any); ok {
+					for _, e := range arr {
+						if s, ok := e.(string); ok && s != "" {
+							out[s] = true
+						}
+					}
+				}
+			}
+			collectFixtureGenres(val, out)
+		}
+	case []any:
+		for _, e := range x {
+			collectFixtureGenres(e, out)
+		}
+	}
+}
 
 // TestTitleCaseMatchesUpstream pins genre casing to what the golden fixtures
 // show, including the hyphen and ampersand boundaries that were wrong before.
@@ -14,6 +79,11 @@ func TestTitleCaseMatchesUpstream(t *testing.T) {
 		"lo-fi":             "Lo-Fi",
 		"pop rock":          "Pop Rock",
 		"pop":               "Pop",
+		// Upstream flattens acronyms to plain per-word casing rather than
+		// special-casing them: the live service returns "Idm", not "IDM"
+		// (captured in the Radiohead fixtures). Reproducing that naive
+		// behavior is correct; a canonical-acronym table would diverge.
+		"idm": "Idm",
 	}
 	for in, want := range cases {
 		if got := titleCase(in); got != want {

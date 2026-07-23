@@ -231,3 +231,22 @@ Effort: M.
 3. Items 5, 6, 19, and the item 26 batch - correctness of the build machinery.
 4. Items 12, 15, 16 in one schema bump, then item 11 (transport compression), then item 13/14 - each independently testable, one rebuild each or batched.
 5. Item 17 (profile first), items 18, 28, 29 as capacity allows.
+
+## Second-pass gaps (adversarial sweep, 2026-07-23)
+
+A follow-up sweep for algorithmically-derived fields that must match upstream turned up a clear theme: the opt-in live-fallback path (`internal/musicbrainz/entities.go`) is a second, thinner implementation of resource assembly that never received three fixes made to the dataset pipeline (`internal/pipeline`).
+Each item below was cross-checked against the golden fixtures and, where the fixture was ambiguous, against live `musicbrainz.org`.
+Only the default dataset path ships by default, so the fallback items affect operators who pass `-fallback` only; the dataset-path items affect the shipped artifact but are cosmetic (order/duplication/empty fields Lidarr does not filter on).
+
+Priority order:
+
+31. **Fallback album `Type` never defaults to "Other"** (functional, fallback-only). `entities.go:225` `primaryType` returns `""` for an untyped release group; the pipeline defaults it to `"Other"` (`artist.go:707-720`) precisely because an empty `Type` matches no metadata profile and makes the album unmonitorable. Untyped release groups are real (the pipeline's own fixtures model them). Fix: factor the "Other" default into a shared helper both paths call. Effort S.
+32. **Fallback link `Type` uses MusicBrainz's relation vocabulary, not the domain-derived label** (cosmetic, 100% wrong on fallback). `entities.go:156` emits `r.Type` ("official homepage", "social network", "IMDb") where upstream emits the second-level domain ("discogs", "imdb", "tiktok"). Fix: extract `linkType` from `enrich.go` into a shared package and call it in `mapLinks`. Effort S.
+33. **Fallback genres are never title-cased** (cosmetic, fallback-only). `entities.go:130` passes MusicBrainz's raw lowercase names through; the pipeline applies `titleCase`. Fix: call the shared `titleCase` in `mapGenres`. Effort S.
+    31-33 share one remedy: extract `primaryType`-with-"Other", `linkType`, and `titleCase` into a package both `pipeline` and `musicbrainz` import, so the two paths cannot drift again.
+34. **Dataset sorts and name-dedupes `ArtistAliases`/`OldIDs`/`Links` against upstream order** (cosmetic, wide blast radius, fix uncertain). Fixtures show Bach's `oldids` are not alphabetical and his `artistaliases` keep literal duplicates; the Beatles' `links` are in neither alphabetical nor type order. `sortedUnique` (`artist.go:764`) and the `linksFor` sort (`enrich.go:230`) impose an order upstream does not use, and `artist_test.go:265` actively pins the wrong (deduped) behavior. Investigate whether natural table-read order reproduces upstream before changing; the dumps are static so read-order is already deterministic, making the "for determinism" sort unnecessary. Effort M (investigation first).
+35. **Genre tie-break (equal vote count) is alphabetical; upstream's is not** (cosmetic, fix unknown). Prince's fixtures show count-tied genres ordered non-alphabetically (`Neo-Psychedelia, Soul, R&B` at count 4). The descending-count primary sort is correct; only the tie-break (`enrich.go:190`) is wrong, and the true key (likely tag-row insertion order) needs to be confirmed available through the scan. Effort M (investigation first).
+36. **`Release.Label` dedupes same-name labels upstream keeps** (cosmetic, narrow). The Pulp Fiction OST fixture keeps `["MCA Records", "MCA Records"]`; `album.go`'s `seen[name]` drops the duplicate. Fix: dedupe by label id, or not at all. Effort S.
+37. **Album `Aliases` is never populated** (cosmetic content gap, all albums). Both paths hardcode `[]string{}`; no handler reads `release_group_alias`, though the Pulp Fiction OST fixture carries `"aliases": ["Pulp Fiction"]`. Fix: add a `release_group_alias` handler and wire it into album emit. Effort M.
+
+Suggested handling: ship the current dataset rebuild (it fixes the widespread tiktok `/@handle` link regression and is validated), then take 31-33+36 as one shared-helper change, 37 as a small feature, and 34-35 as investigations that must establish upstream's real order before any code changes.
