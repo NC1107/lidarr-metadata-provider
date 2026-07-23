@@ -89,25 +89,40 @@ func (b *DictBuilder) maybeTrain() error {
 func (b *DictBuilder) train() error {
 	dict, err := trainDictionary(b.samples)
 	if err != nil {
+		b.err = err
 		return err
 	}
 	// dict may be nil (too few samples, or no zstd binary); the writer then
 	// compresses without one, which is still valid.
 	if err := b.w.SetDictionary(dict); err != nil {
+		b.err = err
 		return err
 	}
 	b.samples = nil
 
+	// Once the Parallel exists it owns worker goroutines, so any failure while
+	// flushing the buffer through it must close it (draining those workers) and
+	// remember the error. Without this a later Close() would see !ready, train
+	// again over a live writer, leak this Parallel, and report success.
 	b.par = NewParallel(b.w, b.workers)
-	for _, a := range b.bufB {
-		if err := b.par.AddAlbum(a); err != nil {
-			return err
+	flush := func() error {
+		for _, a := range b.bufB {
+			if err := b.par.AddAlbum(a); err != nil {
+				return err
+			}
 		}
+		for _, a := range b.bufA {
+			if err := b.par.AddArtist(a); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	for _, a := range b.bufA {
-		if err := b.par.AddArtist(a); err != nil {
-			return err
-		}
+	if err := flush(); err != nil {
+		b.err = err
+		b.par.Close()
+		b.par = nil
+		return err
 	}
 	b.bufA, b.bufB = nil, nil
 	b.ready = true
