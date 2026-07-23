@@ -62,6 +62,11 @@ func albumTables() map[string]string {
 	t["label"] = row(mbdump.LabelColumns, map[int]string{
 		mbdump.LabelID: "42", mbdump.LabelName: "Go! Discs"})
 
+	// A search-hint alias on the self-titled album (group 50), to exercise
+	// release_group_alias -> AlbumResource.Aliases.
+	t["release_group_alias"] = row(mbdump.ReleaseGroupAliasColumns, map[int]string{
+		mbdump.ReleaseGroupAliasGroup: "50", mbdump.ReleaseGroupAliasName: "The Las"})
+
 	// Two countries with different dates: the earliest is the release date.
 	t["release_country"] = strings.Join([]string{
 		row(mbdump.ReleaseCountryColumns, map[int]string{
@@ -88,7 +93,7 @@ func albumTables() map[string]string {
 
 var albumCoreTables = append(append([]string{}, coreTables...),
 	"area", "label", "medium", "medium_format", "recording",
-	"release_country", "release_label", "release_unknown_country", "track")
+	"release_country", "release_group_alias", "release_label", "release_unknown_country", "track")
 
 func init() { derivedTables = append(derivedTables, "release_group_tag") }
 
@@ -240,6 +245,15 @@ func TestBuiltAlbumMatchesTheContract(t *testing.T) {
 	}
 	if len(diffs) > 0 {
 		t.Errorf("built album drifted from the contract: %v", diffs)
+	}
+}
+
+// TestBuildAlbumPopulatesAliases guards AUDIT.md 37: album aliases, once always
+// emitted empty, now come from release_group_alias.
+func TestBuildAlbumPopulatesAliases(t *testing.T) {
+	album := buildAlbums(t)[albumGID]
+	if len(album.Aliases) != 1 || album.Aliases[0] != "The Las" {
+		t.Errorf("album Aliases = %v, want [The Las]", album.Aliases)
 	}
 }
 

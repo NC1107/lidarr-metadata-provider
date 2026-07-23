@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nc1107/lidarr-metadata-provider/internal/format"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
 )
 
@@ -131,7 +132,9 @@ func mapGenres(in []mbGenre) []string {
 	out := make([]string, 0, len(in))
 	for _, g := range in {
 		if g.Name != "" {
-			out = append(out, g.Name)
+			// Upstream title-cases genres; the raw web-service names are
+			// lowercase (see [format.TitleCase] and AUDIT.md 33).
+			out = append(out, format.TitleCase(g.Name))
 		}
 	}
 	return out
@@ -153,7 +156,9 @@ func mapLinks(in []mbRelation) []skyhook.LinkResource {
 	out := make([]skyhook.LinkResource, 0, len(in))
 	for _, r := range in {
 		if r.URL != nil && r.URL.Resource != "" {
-			out = append(out, skyhook.LinkResource{Target: r.URL.Resource, Type: r.Type})
+			// Upstream types links by domain label, not by MusicBrainz's own
+			// relationship vocabulary (see [format.LinkType] and AUDIT.md 32).
+			out = append(out, skyhook.LinkResource{Target: r.URL.Resource, Type: format.LinkType(r.URL.Resource)})
 		}
 	}
 	return out
@@ -224,9 +229,12 @@ func toAlbumArtist(a *mbArtist) skyhook.AlbumArtistResource {
 
 func primaryType(rg *mbReleaseGroup) string {
 	if rg.PrimaryType != nil {
-		return *rg.PrimaryType
+		return format.PrimaryTypeOrOther(*rg.PrimaryType)
 	}
-	return ""
+	// An empty Type matches no metadata profile and hides the album; upstream
+	// reports untyped groups as "Other" (see [format.PrimaryTypeOrOther] and
+	// AUDIT.md 31).
+	return "Other"
 }
 
 // toArtistAlbum maps a release group to the skeletal entry in an artist's

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"unicode"
 
+	"github.com/nc1107/lidarr-metadata-provider/internal/format"
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
 )
@@ -203,7 +203,7 @@ func (c *collector) genresFor(tags []weightedTag) []string {
 		if name == "" || !c.genreNames[strings.ToLower(name)] {
 			continue
 		}
-		title := titleCase(name)
+		title := format.TitleCase(name)
 		if !seen[title] {
 			seen[title] = true
 			out = append(out, title)
@@ -224,70 +224,11 @@ func (c *collector) linksFor(urlIDs []int) []skyhook.LinkResource {
 			continue
 		}
 		seen[url] = true
-		out = append(out, skyhook.LinkResource{Target: url, Type: linkType(url)})
+		out = append(out, skyhook.LinkResource{Target: url, Type: format.LinkType(url)})
 	}
 	// Stable order across rebuilds.
 	sort.Slice(out, func(i, j int) bool { return out[i].Target < out[j].Target })
 	return out
-}
-
-// titleCase capitalises each word, matching how upstream renders genre names.
-// A word starts at the beginning and after a space, a hyphen, or an ampersand,
-// so "j-pop" becomes "J-Pop" and "r&b" becomes "R&B", matching the golden
-// fixtures. Splitting only on whitespace left everything after a hyphen or
-// ampersand lowercase.
-func titleCase(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	wordStart := true
-	for _, r := range s {
-		if wordStart {
-			b.WriteRune(unicode.ToUpper(r))
-		} else {
-			b.WriteRune(r)
-		}
-		wordStart = r == ' ' || r == '-' || r == '&'
-	}
-	return b.String()
-}
-
-// linkType extracts the label upstream gives a link, which is the host's
-// second-to-last component: "https://www.discogs.com/artist/1" -> "discogs".
-//
-// The one exception the golden fixtures show is co.uk and co.jp, which upstream
-// strips so bbc.co.uk types as "bbc". It does not strip any other compound
-// suffix: gov.au types as "gov", co.kr as "co", ac.jp as "ac", com.br as "com".
-// An earlier version stripped a broad hardcoded list (gov, com, org, net, ac),
-// which disagreed with upstream on every one of those.
-func linkType(url string) string {
-	host := url
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
-	}
-	// Isolate the authority before touching '@': a path can carry one
-	// (tiktok.com/@handle), and only the authority's '@' is userinfo.
-	if i := strings.IndexByte(host, '/'); i >= 0 {
-		host = host[:i]
-	}
-	// Drop any userinfo, so user:pass@example.com reads as example, not user.
-	if i := strings.IndexByte(host, '@'); i >= 0 {
-		host = host[i+1:]
-	}
-	if i := strings.IndexByte(host, ':'); i >= 0 {
-		host = host[:i]
-	}
-	host = strings.Trim(strings.ToLower(host), ".") // tolerate a trailing-dot FQDN
-	host = strings.TrimPrefix(host, "www.")
-
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return host
-	}
-	last := parts[len(parts)-1]
-	if len(parts) >= 3 && parts[len(parts)-2] == "co" && (last == "uk" || last == "jp") {
-		return parts[len(parts)-3]
-	}
-	return parts[len(parts)-2]
 }
 
 // coverArtHandlers reads the cover art archive. Only which release groups have

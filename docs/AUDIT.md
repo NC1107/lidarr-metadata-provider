@@ -238,6 +238,11 @@ A follow-up sweep for algorithmically-derived fields that must match upstream tu
 Each item below was cross-checked against the golden fixtures and, where the fixture was ambiguous, against live `musicbrainz.org`.
 Only the default dataset path ships by default, so the fallback items affect operators who pass `-fallback` only; the dataset-path items affect the shipped artifact but are cosmetic (order/duplication/empty fields Lidarr does not filter on).
 
+**Resolved 2026-07-23 (second pass):** 31, 32, 33, 36, 37 are done with tests.
+The fallback path now shares the pipeline's transforms through a new `internal/format` package (so the two cannot drift again); untyped fallback albums default to "Other", fallback links type by domain, and fallback genres are title-cased.
+Labels dedupe by id rather than name, and album `Aliases` are populated from `release_group_alias`.
+Still open: 34 (alias/oldid/link ordering) and 35 (genre tie-break), both of which need upstream's real order established from captures before any change - do not guess.
+
 Priority order:
 
 31. **Fallback album `Type` never defaults to "Other"** (functional, fallback-only). `entities.go:225` `primaryType` returns `""` for an untyped release group; the pipeline defaults it to `"Other"` (`artist.go:707-720`) precisely because an empty `Type` matches no metadata profile and makes the album unmonitorable. Untyped release groups are real (the pipeline's own fixtures model them). Fix: factor the "Other" default into a shared helper both paths call. Effort S.

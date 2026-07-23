@@ -55,6 +55,7 @@ func (c *collector) albumHandlers() map[string]mbdump.RowFunc {
 		"track":                   c.readTrack,
 		"recording":               c.readRecording,
 		"release_label":           c.readReleaseLabel,
+		"release_group_alias":     c.readReleaseGroupAlias,
 		"label":                   c.readLabel,
 		"release_country":         c.readReleaseCountry,
 		"release_unknown_country": c.readReleaseDate,
@@ -182,6 +183,28 @@ func (c *collector) readReleaseLabel(row []mbdump.Field) error {
 	}
 	if label, ok := optInt(row[mbdump.ReleaseLabelLabel]); ok {
 		rel.labels = append(rel.labels, label)
+	}
+	return nil
+}
+
+// readReleaseGroupAlias collects an album's alternate titles. Upstream carries
+// these (a search-hint alias like "Pulp Fiction" for the OST); the field was
+// always emitted empty before (AUDIT.md 37). release_group is read before
+// release_group_alias in tar order, so the group already exists here.
+func (c *collector) readReleaseGroupAlias(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("release_group_alias", row, mbdump.ReleaseGroupAliasColumns); err != nil {
+		return err
+	}
+	id, err := atoi(row[mbdump.ReleaseGroupAliasGroup])
+	if err != nil {
+		return err
+	}
+	g, ok := c.groups[id]
+	if !ok {
+		return nil
+	}
+	if name := row[mbdump.ReleaseGroupAliasName].Value; name != "" {
+		g.aliases = append(g.aliases, name)
 	}
 	return nil
 }
@@ -394,7 +417,7 @@ func (c *collector) fullAlbum(g *groupRow, tracks []stagedTrack) *skyhook.AlbumR
 		ID:              g.gid,
 		OldIDs:          sortedUnique(g.oldIDs),
 		Title:           g.name,
-		Aliases:         []string{},
+		Aliases:         sortedUnique(g.aliases),
 		Disambiguation:  g.comment,
 		Overview:        nil,
 		Type:            c.primaryType(g.typeID),
@@ -455,11 +478,17 @@ func (c *collector) release(rel *releaseRow, status string, byMedium map[int][]s
 	}
 	sort.Strings(countries)
 
+	// Dedupe by label id, not by name: two distinct label entities can share a
+	// display name and upstream keeps both (AUDIT.md 36), while the same label
+	// listed twice (e.g. two catalog numbers) collapses to one.
 	labels := make([]string, 0, len(rel.labels))
-	seen := map[string]bool{}
+	seen := map[int]bool{}
 	for _, id := range rel.labels {
-		if name, ok := c.labelNames[id]; ok && name != "" && !seen[name] {
-			seen[name] = true
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if name, ok := c.labelNames[id]; ok && name != "" {
 			labels = append(labels, name)
 		}
 	}

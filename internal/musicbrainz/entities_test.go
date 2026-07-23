@@ -77,3 +77,42 @@ func TestToAlbumUsesRecordingCreditWhenTrackHasNone(t *testing.T) {
 		t.Errorf("track ArtistID = %q, want g", album.Releases[0].Tracks[0].ArtistID)
 	}
 }
+
+// TestFallbackPrimaryTypeDefaultsToOther guards AUDIT.md 31: an untyped release
+// group must type as "Other", never "", or Lidarr's profile filter hides it.
+func TestFallbackPrimaryTypeDefaultsToOther(t *testing.T) {
+	if got := primaryType(&mbReleaseGroup{}); got != "Other" {
+		t.Errorf("untyped release group Type = %q, want Other", got)
+	}
+	empty := ""
+	if got := primaryType(&mbReleaseGroup{PrimaryType: &empty}); got != "Other" {
+		t.Errorf("empty-typed release group Type = %q, want Other", got)
+	}
+	album := "Album"
+	if got := primaryType(&mbReleaseGroup{PrimaryType: &album}); got != "Album" {
+		t.Errorf("typed release group Type = %q, want Album", got)
+	}
+}
+
+// TestFallbackGenresTitleCased guards AUDIT.md 33: fallback genres are rendered
+// the way upstream does, not left in the web service's raw lowercase.
+func TestFallbackGenresTitleCased(t *testing.T) {
+	got := mapGenres([]mbGenre{{Name: "j-pop"}, {Name: "r&b"}, {Name: ""}})
+	if len(got) != 2 || got[0] != "J-Pop" || got[1] != "R&B" {
+		t.Errorf("mapGenres = %v, want [J-Pop R&B]", got)
+	}
+}
+
+// TestFallbackLinkTypeByDomain guards AUDIT.md 32: a link types by its domain
+// label, not by MusicBrainz's own relationship vocabulary, and an @handle in
+// the path does not leak into the type.
+func TestFallbackLinkTypeByDomain(t *testing.T) {
+	rel := mbRelation{Type: "social network"}
+	rel.URL = &struct {
+		Resource string `json:"resource"`
+	}{Resource: "https://www.tiktok.com/@thebeatles"}
+	got := mapLinks([]mbRelation{rel})
+	if len(got) != 1 || got[0].Type != "tiktok" {
+		t.Errorf("mapLinks type = %+v, want tiktok", got)
+	}
+}

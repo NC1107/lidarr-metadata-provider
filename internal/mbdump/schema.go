@@ -52,6 +52,12 @@ const (
 	ReleaseGroupTypeID       = 4
 	ReleaseGroupComment      = 5
 
+	// release_group_alias mirrors artist_alias; every *_alias table shares this
+	// 16-column layout, so only the two fields we read are named.
+	ReleaseGroupAliasColumns = 16
+	ReleaseGroupAliasGroup   = 1
+	ReleaseGroupAliasName    = 2
+
 	// release_group_meta carries the first release date, which is what the
 	// contract's ReleaseDate reports.
 	ReleaseGroupMetaColumns     = 7

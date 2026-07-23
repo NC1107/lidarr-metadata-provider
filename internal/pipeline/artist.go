@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nc1107/lidarr-metadata-provider/internal/format"
 	"github.com/nc1107/lidarr-metadata-provider/internal/mbdump"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
 )
@@ -201,6 +202,7 @@ type groupRow struct {
 	typeID     int
 	secondary  []int
 	oldIDs     []string
+	aliases    []string
 	firstYear  int
 	firstMonth int
 	firstDay   int
@@ -714,10 +716,7 @@ func (c *collector) album(g *groupRow) skyhook.ArtistAlbumResource {
 // five artists carry no type in the export and all of them read "Other"
 // upstream.
 func (c *collector) primaryType(id int) string {
-	if name, ok := c.primaryTypes[id]; ok && name != "" {
-		return name
-	}
-	return "Other"
+	return format.PrimaryTypeOrOther(c.primaryTypes[id])
 }
 
 // formatDate renders a partial MusicBrainz date the way the contract does,
