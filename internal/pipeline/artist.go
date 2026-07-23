@@ -249,8 +249,10 @@ type collector struct {
 	urlPhase   bool
 	tagPhase   bool
 
-	// Release groups that have a Cover Art Archive cover.
-	groupHasCover map[int]bool
+	// Release groups that have a Cover Art Archive cover, and the release to
+	// group map that lets a release-level cover mark its album.
+	groupHasCover  map[int]bool
+	releaseToGroup map[int]int
 }
 
 func newCollector(want map[string]bool) *collector {
@@ -283,6 +285,7 @@ func newCollector(want map[string]bool) *collector {
 		neededURLs:     map[int]bool{},
 		neededTags:     map[int]bool{},
 		groupHasCover:  map[int]bool{},
+		releaseToGroup: map[int]int{},
 	}
 }
 

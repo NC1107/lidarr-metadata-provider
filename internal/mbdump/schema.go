@@ -182,11 +182,16 @@ const (
 	URLID      = 0
 	URLValue   = 2
 
-	// release_group_cover_art records which release groups have a chosen
-	// cover. Its presence is all we need: the Cover Art Archive URL is
-	// deterministic from the release group's MBID.
+	// release_group_cover_art records release groups with an explicitly chosen
+	// representative cover.
 	ReleaseGroupCoverArtColumns = 2
 	ReleaseGroupCoverArtGroup   = 0
+
+	// cover_art records artwork at the release level. Most albums have art
+	// this way rather than through an explicit release_group representative,
+	// so this is the table that actually says whether an album has a cover.
+	CoverArtColumns = 12
+	CoverArtRelease = 1
 )
 
 // CheckColumns verifies a row has the expected width, naming the table so a

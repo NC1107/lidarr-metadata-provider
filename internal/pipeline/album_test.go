@@ -106,12 +106,16 @@ func buildAlbums(t *testing.T) map[string]*skyhook.AlbumResource {
 	}
 	// A cover-art archive marking release group 50 (the self-titled album) as
 	// having a cover.
+	// Release 100 belongs to release group 50 (the self-titled album) and has
+	// a cover; the release_group_cover_art table is left empty to prove the
+	// release-level path is what marks the album.
 	caTables := map[string]string{
-		"cover_art_archive.release_group_cover_art": row(mbdump.ReleaseGroupCoverArtColumns,
-			map[int]string{mbdump.ReleaseGroupCoverArtGroup: "50"}),
+		"cover_art_archive.cover_art": row(mbdump.CoverArtColumns,
+			map[int]string{mbdump.CoverArtRelease: "100"}),
+		"cover_art_archive.release_group_cover_art": "",
 	}
 	coverArt, err := mbdump.Open(fakeExport(t,
-		[]string{"cover_art_archive.release_group_cover_art"}, caTables))
+		[]string{"cover_art_archive.cover_art", "cover_art_archive.release_group_cover_art"}, caTables))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -283,8 +283,26 @@ func isPublicSuffix(s string) bool {
 // a cover is needed: the image URL is derived from the MBID.
 func (c *collector) coverArtHandlers() map[string]mbdump.RowFunc {
 	return map[string]mbdump.RowFunc{
+		"cover_art_archive.cover_art":               c.readReleaseCover,
 		"cover_art_archive.release_group_cover_art": c.readCoverArt,
 	}
+}
+
+// readReleaseCover marks an album as having a cover when any of its releases
+// carries artwork, which is how most albums have art. The release group front
+// endpoint serves it regardless of whether a representative was chosen.
+func (c *collector) readReleaseCover(row []mbdump.Field) error {
+	if err := mbdump.CheckColumns("cover_art", row, mbdump.CoverArtColumns); err != nil {
+		return err
+	}
+	release, err := atoi(row[mbdump.CoverArtRelease])
+	if err != nil {
+		return err
+	}
+	if rg, ok := c.releaseToGroup[release]; ok {
+		c.groupHasCover[rg] = true
+	}
+	return nil
 }
 
 func (c *collector) readCoverArt(row []mbdump.Field) error {

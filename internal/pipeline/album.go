@@ -111,6 +111,7 @@ func (c *collector) readReleaseStaged(row []mbdump.Field) error {
 
 	c.releaseByID[id] = rel
 	c.releasesByRG[rg] = append(c.releasesByRG[rg], rel)
+	c.releaseToGroup[id] = rg
 
 	// Tracks arrive later carrying only a medium id, so the path back to an
 	// album has to be recorded now, while both ends are known.
