@@ -36,7 +36,7 @@ func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (
 	out := map[string]*Artist{}
 	const hex = "0123456789abcdef"
 	for _, prefix := range hex {
-		rows, err := harvestPrefix(client, userAgent, string(prefix))
+		rows, err := harvestPrefixRetry(client, userAgent, string(prefix))
 		if err != nil {
 			return nil, fmt.Errorf("harvesting MBIDs starting %q: %w", string(prefix), err)
 		}
@@ -50,6 +50,25 @@ func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (
 		time.Sleep(time.Second)
 	}
 	return out, nil
+}
+
+// harvestPrefixRetry wraps harvestPrefix with bounded backoff. The query
+// service is a best-effort shared resource that occasionally times out or
+// throttles; without this a single hiccup on any of the sixteen slices aborts a
+// multi-hour unattended build, the same way the Wikipedia fetch already guards
+// itself.
+func harvestPrefixRetry(client *http.Client, userAgent, prefix string) (map[string]*Artist, error) {
+	const maxAttempts = 4
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		rows, err := harvestPrefix(client, userAgent, prefix)
+		if err == nil {
+			return rows, nil
+		}
+		lastErr = err
+		time.Sleep(time.Duration(attempt+1) * 5 * time.Second)
+	}
+	return nil, lastErr
 }
 
 // sparqlResults is the shape of a SPARQL JSON result set, narrowed to the

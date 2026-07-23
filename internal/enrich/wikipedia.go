@@ -15,7 +15,9 @@ import (
 	"github.com/nc1107/lidarr-metadata-provider/internal/ratelimit"
 )
 
-const extractsEndpoint = "https://en.wikipedia.org/w/api.php"
+// extractsEndpoint is a var, not a const, only so a test can point the fetch at
+// a local server; production always uses the real MediaWiki API.
+var extractsEndpoint = "https://en.wikipedia.org/w/api.php"
 
 // One extracts request returns the lead section of up to twenty articles, so
 // the whole biography set is a few thousand requests rather than one per
@@ -92,8 +94,12 @@ func FetchBios(client *http.Client, userAgent string, artists map[string]*Artist
 	limiter := ratelimit.New(extractsInterval)
 	ctx := context.Background()
 	jobs := make(chan []string)
-	var doneBatches, gotBios, missed int64
-	var mu sync.Mutex // guards checkpoint, which reads the shared map
+	// Workers only fetch; a single collector applies every result to the artist
+	// map. That keeps all mutation of Artist.Overview and all reads of it by the
+	// checkpoint on one goroutine, so the biography written to the cache can
+	// never be a torn read of a string a worker was mutating at that instant.
+	results := make(chan batchResult, workers)
+	var missedBatches int64
 	var wg sync.WaitGroup
 
 	for i := 0; i < workers; i++ {
@@ -103,38 +109,50 @@ func FetchBios(client *http.Client, userAgent string, artists map[string]*Artist
 			for titles := range jobs {
 				extracts, err := fetchExtracts(ctx, client, limiter, userAgent, titles)
 				if err != nil {
-					atomic.AddInt64(&missed, int64(len(titles)))
+					atomic.AddInt64(&missedBatches, 1)
 				}
-				for title, text := range extracts {
-					for _, a := range bySend[title] {
-						a.Overview = text
-						atomic.AddInt64(&gotBios, 1)
-					}
-				}
-				n := atomic.AddInt64(&doneBatches, 1)
-				if n%200 == 0 {
-					if logf != nil {
-						logf("  biographies: %d/%d articles, %d with text (%d batches unreachable)",
-							n*extractsBatch, len(order), atomic.LoadInt64(&gotBios), atomic.LoadInt64(&missed)/extractsBatch)
-					}
-					if checkpoint != nil {
-						mu.Lock()
-						checkpoint()
-						mu.Unlock()
-					}
-				}
+				results <- batchResult{extracts: extracts}
 			}
 		}()
 	}
-	for _, b := range batches {
-		jobs <- b
+	go func() {
+		for _, b := range batches {
+			jobs <- b
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+
+	done, gotBios := 0, 0
+	for r := range results {
+		for title, text := range r.extracts {
+			for _, a := range bySend[title] {
+				a.Overview = text
+				gotBios++
+			}
+		}
+		done++
+		if done%200 == 0 {
+			if logf != nil {
+				logf("  biographies: %d/%d articles, %d with text (%d batches unreachable)",
+					done*extractsBatch, len(order), gotBios, atomic.LoadInt64(&missedBatches))
+			}
+			if checkpoint != nil {
+				checkpoint()
+			}
+		}
 	}
-	close(jobs)
-	wg.Wait()
 	if logf != nil {
-		logf("  biographies: %d articles resolved to text", atomic.LoadInt64(&gotBios))
+		logf("  biographies: %d articles resolved to text", gotBios)
 	}
 	return nil
+}
+
+// batchResult carries one batch's fetched extracts from a worker to the single
+// collector that applies them.
+type batchResult struct {
+	extracts map[string]string
 }
 
 // sendTitle turns a stored article title into the form the API is queried with.
