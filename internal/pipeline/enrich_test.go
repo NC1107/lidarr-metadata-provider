@@ -41,9 +41,10 @@ func buildAll(t *testing.T, artistEnrich map[string]ArtistEnrichment) (map[strin
 // balloon.
 func TestEnrichmentPopulatesArtistImageAndBiography(t *testing.T) {
 	const bio = "The La's were an English rock band from Liverpool."
+	const imageURL = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/The_La%27s.jpg/500px-The_La%27s.jpg"
 	enrich := map[string]ArtistEnrichment{
 		artistGID: {
-			Image:    "https://commons.wikimedia.org/wiki/Special:FilePath/The%20La%27s.jpg",
+			Image:    imageURL,
 			Overview: bio,
 		},
 	}
@@ -60,9 +61,10 @@ func TestEnrichmentPopulatesArtistImageAndBiography(t *testing.T) {
 	if img.CoverType != "Poster" {
 		t.Errorf("image CoverType = %q, want Poster", img.CoverType)
 	}
-	want := "https://commons.wikimedia.org/wiki/Special:FilePath/The%20La%27s.jpg?width=500"
-	if img.URL != want || img.RemoteURL != want {
-		t.Errorf("image URL = %q / %q, want %q", img.URL, img.RemoteURL, want)
+	// The image is served as-is, with no query string appended, so Lidarr
+	// caches it under a clean filename.
+	if img.URL != imageURL || img.RemoteURL != imageURL {
+		t.Errorf("image URL = %q / %q, want %q", img.URL, img.RemoteURL, imageURL)
 	}
 	if a.Overview == nil || *a.Overview != bio {
 		t.Errorf("Overview = %v, want %q", a.Overview, bio)

@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,11 +20,28 @@ func TestWikiTitleExtractsArticle(t *testing.T) {
 	}
 }
 
-func TestCommonsFilePathForcesHTTPS(t *testing.T) {
-	in := "http://commons.wikimedia.org/wiki/Special:FilePath/Radiohead.jpg"
-	want := "https://commons.wikimedia.org/wiki/Special:FilePath/Radiohead.jpg"
-	if got := commonsFilePath(in); got != want {
-		t.Errorf("commonsFilePath(%q) = %q, want %q", in, got, want)
+// TestCommonsThumb checks the P18 value becomes a direct thumbnail URL ending
+// in a clean image extension, with spaces as underscores and the md5-based
+// two-level directory. The expected URLs were confirmed to return the image.
+func TestCommonsThumb(t *testing.T) {
+	cases := map[string]string{
+		"http://commons.wikimedia.org/wiki/Special:FilePath/RadioheadO2211125%20composite.jpg": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a1/RadioheadO2211125_composite.jpg/500px-RadioheadO2211125_composite.jpg",
+		"http://commons.wikimedia.org/wiki/Special:FilePath/Beatles%20Trenter%201963.jpg":      "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Beatles_Trenter_1963.jpg/500px-Beatles_Trenter_1963.jpg",
+	}
+	for in, want := range cases {
+		if got := commonsThumb(in); got != want {
+			t.Errorf("commonsThumb(%q)\n = %q\nwant %q", in, got, want)
+		}
+	}
+	// A special char (parenthesis) keeps Wikidata's encoding.
+	got := commonsThumb("http://commons.wikimedia.org/wiki/Special:FilePath/Peter%20Steen%20%28skuespiller%29.jpg")
+	if !strings.Contains(got, "/Peter_Steen_%28skuespiller%29.jpg/500px-Peter_Steen_%28skuespiller%29.jpg") {
+		t.Errorf("parenthesised name encoded wrong: %q", got)
+	}
+	// An svg renders to a png thumbnail.
+	svg := commonsThumb("http://commons.wikimedia.org/wiki/Special:FilePath/Some%20Logo.svg")
+	if !strings.HasSuffix(svg, ".svg.png") {
+		t.Errorf("svg thumbnail should end .svg.png: %q", svg)
 	}
 }
 

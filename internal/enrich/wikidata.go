@@ -1,6 +1,8 @@
 package enrich
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,11 @@ import (
 	"strings"
 	"time"
 )
+
+// thumbWidth is the artist image size stored. A fixed width keeps the URL
+// clean, which matters: Lidarr derives the cached filename from the URL and a
+// query string like ?width=500 ends up in the filename, breaking display.
+const thumbWidth = 500
 
 const wdqsEndpoint = "https://query.wikidata.org/sparql"
 
@@ -114,7 +121,7 @@ func harvestPrefix(client *http.Client, userAgent, prefix string) (map[string]*A
 	}
 	for mbid, imgs := range images {
 		sort.Strings(imgs)
-		out[mbid].Image = commonsFilePath(imgs[0])
+		out[mbid].Image = commonsThumb(imgs[0])
 	}
 	return out, nil
 }
@@ -132,12 +139,48 @@ func wikiTitle(article string) string {
 	return article
 }
 
-// commonsFilePath normalises a Wikidata P18 value to an https Special:FilePath
-// address. That endpoint redirects to the current file and accepts a width
-// parameter, so the pipeline can request a thumbnail without storing image
-// bytes or knowing Commons's internal hashing.
-func commonsFilePath(raw string) string {
-	return strings.Replace(raw, "http://commons.wikimedia.org/", "https://commons.wikimedia.org/", 1)
+// commonsThumb turns a Wikidata P18 value into a direct Wikimedia thumbnail
+// URL of a fixed width, ending in a clean image extension with no query string.
+//
+// A thumbnail's address on Commons is deterministic: the file lives under a
+// two-level directory named by the md5 of its filename, and the thumbnail sits
+// beside it under thumb/ with a "<width>px-" prefix. Building the address here
+// rather than linking Special:FilePath?width= avoids the query string, which
+// Lidarr folds into the cached filename and then cannot serve, and avoids a
+// redirect on every image load. Spaces are underscores in these paths; the rest
+// of the filename keeps the encoding Wikidata already gave it, which is the same
+// encoding Commons uses, so no re-encoding can drift.
+func commonsThumb(raw string) string {
+	const marker = "/Special:FilePath/"
+	i := strings.Index(raw, marker)
+	if i < 0 {
+		// Not the expected form; fall back to the https file address.
+		return strings.Replace(raw, "http://commons.wikimedia.org/", "https://commons.wikimedia.org/", 1)
+	}
+	encoded := raw[i+len(marker):]
+	if q := strings.IndexByte(encoded, '?'); q >= 0 {
+		encoded = encoded[:q]
+	}
+	// Commons paths use underscores for spaces where a URL would use %20.
+	seg := strings.ReplaceAll(encoded, "%20", "_")
+
+	name, err := url.PathUnescape(seg)
+	if err != nil {
+		return strings.Replace(raw, "http://commons.wikimedia.org/", "https://commons.wikimedia.org/", 1)
+	}
+	sum := md5.Sum([]byte(name))
+	h := hex.EncodeToString(sum[:])
+
+	prefix := fmt.Sprintf("%dpx-%s", thumbWidth, seg)
+	// A few formats are rendered to a different thumbnail type.
+	switch strings.ToLower(name[strings.LastIndexByte(name, '.')+1:]) {
+	case "svg":
+		prefix = fmt.Sprintf("%dpx-%s.png", thumbWidth, seg)
+	case "tif", "tiff":
+		prefix = fmt.Sprintf("lossy-page1-%dpx-%s.jpg", thumbWidth, seg)
+	}
+	return fmt.Sprintf("https://upload.wikimedia.org/wikipedia/commons/thumb/%s/%s/%s/%s",
+		h[0:1], h[0:2], seg, prefix)
 }
 
 func truncate(s string, max int) string {

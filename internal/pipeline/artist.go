@@ -661,8 +661,7 @@ func (c *collector) enrichArtist(gid string) ([]skyhook.ImageResource, *string) 
 	}
 	images := []skyhook.ImageResource{}
 	if e.Image != "" {
-		url := e.Image + "?width=500"
-		images = []skyhook.ImageResource{{CoverType: "Poster", URL: url, RemoteURL: url}}
+		images = []skyhook.ImageResource{{CoverType: "Poster", URL: e.Image, RemoteURL: e.Image}}
 	}
 	var overview *string
 	if e.Overview != "" {
