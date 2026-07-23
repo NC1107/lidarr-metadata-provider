@@ -143,15 +143,28 @@ func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResou
 	for _, ar := range a.Artists {
 		present[ar.ID] = true
 	}
+	// The artist a dangling track is reattributed to must itself be in the
+	// list. Prefer the primary; fall back to the first listed artist.
+	fallback := a.ArtistID
+	if !present[fallback] && len(a.Artists) > 0 {
+		fallback = a.Artists[0].ID
+	}
 	for i := range a.Releases {
-		for _, t := range a.Releases[i].Tracks {
+		for j := range a.Releases[i].Tracks {
+			t := &a.Releases[i].Tracks[j]
 			if t.ArtistID == "" || present[t.ArtistID] {
 				continue
 			}
-			present[t.ArtistID] = true
 			if shape, ok := r.albumArtistShape(ctx, t.ArtistID); ok {
+				present[t.ArtistID] = true
 				a.Artists = append(a.Artists, shape)
+				continue
 			}
+			// The track credits an artist the dataset does not have, which
+			// includes artists deleted from MusicBrainz since the export.
+			// Leaving the reference dangling still crashes Lidarr, so the
+			// track is reattributed to an artist that is present.
+			t.ArtistID = fallback
 		}
 	}
 }

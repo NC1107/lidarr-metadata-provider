@@ -43,7 +43,7 @@ func sampleAlbum() *skyhook.AlbumResource {
 		Title: "The La's", Aliases: []string{}, Type: "Album",
 		SecondaryTypes: []string{}, ReleaseStatuses: []string{"Official"},
 		ReleaseDate: str("1990-10-01"), ArtistID: "ff3e88b3-7354-4f30-967c-1a61ebc8c642",
-		Artists: []skyhook.AlbumArtistResource{}, Genres: []string{},
+		Artists: []skyhook.AlbumArtistResource{{ID: "ff3e88b3-7354-4f30-967c-1a61ebc8c642", ArtistName: "The La's"}}, Genres: []string{},
 		Images: []skyhook.ImageResource{}, Links: []skyhook.LinkResource{},
 		Rating: skyhook.RatingResource{},
 		Releases: []skyhook.ReleaseResource{{
@@ -593,5 +593,45 @@ func TestAlbumIncludesEveryTrackArtist(t *testing.T) {
 	}
 	if !present[feat.ID] {
 		t.Error("the featured artist was not added to Artists")
+	}
+}
+
+// A track crediting an artist the dataset does not have (deleted from
+// MusicBrainz, say) must be reattributed rather than left dangling, or Lidarr
+// still crashes on the album.
+func TestUnresolvableTrackArtistIsReassigned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "d.db")
+	w, err := Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	al := sampleAlbum()
+	al.Releases[0].Tracks[0].ArtistID = "dead0000-0000-0000-0000-000000000099" // not in dataset
+	if err := w.AddAlbum(al); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Finish("stamp", 1); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	got, err := r.Album(context.Background(), al.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	present := map[string]bool{}
+	for _, a := range got.Artists {
+		present[a.ID] = true
+	}
+	for _, rel := range got.Releases {
+		for _, tr := range rel.Tracks {
+			if tr.ArtistID != "" && !present[tr.ArtistID] {
+				t.Fatalf("unresolvable track artist %s left dangling", tr.ArtistID)
+			}
+		}
 	}
 }
