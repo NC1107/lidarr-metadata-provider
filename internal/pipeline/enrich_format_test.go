@@ -40,6 +40,11 @@ func TestLinkTypeMatchesUpstream(t *testing.T) {
 		"https://id.loc.gov/x":                 "loc",
 		"http://user:pass@example.com/x":       "example",
 		"https://example.com./x":               "example",
+		// A path can carry an '@' (social handles); it is not userinfo, so the
+		// type stays the service, not the handle.
+		"https://www.tiktok.com/@thebeatles":  "tiktok",
+		"https://www.threads.com/@thebeatles": "threads",
+		"https://www.instagram.com/rihanna":   "instagram",
 	}
 	for in, want := range cases {
 		if got := linkType(in); got != want {

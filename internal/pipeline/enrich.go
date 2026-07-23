@@ -264,12 +264,14 @@ func linkType(url string) string {
 	if i := strings.Index(host, "://"); i >= 0 {
 		host = host[i+3:]
 	}
+	// Isolate the authority before touching '@': a path can carry one
+	// (tiktok.com/@handle), and only the authority's '@' is userinfo.
+	if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
 	// Drop any userinfo, so user:pass@example.com reads as example, not user.
 	if i := strings.IndexByte(host, '@'); i >= 0 {
 		host = host[i+1:]
-	}
-	if i := strings.IndexByte(host, '/'); i >= 0 {
-		host = host[:i]
 	}
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
