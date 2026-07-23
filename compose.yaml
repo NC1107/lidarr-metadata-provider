@@ -10,6 +10,12 @@ services:
     volumes:
       # The dataset lives here and survives image updates.
       - lidarr-metadata:/data
+    environment:
+      # On first boot the server downloads this dataset, verifies it against
+      # its published checksum, and serves it. After that it works offline.
+      # "latest" always resolves to the newest published dataset, so a fresh
+      # volume picks up current data without editing this file.
+      - LMP_DATASET_URL=https://github.com/NC1107/lidarr-metadata-provider/releases/latest/download/dataset.db
     # Uncomment to add live MusicBrainz lookups for releases too new to be in
     # the dataset. Off by default: it is the only thing here that touches the
     # network while serving. The contact identifies your instance to
@@ -18,6 +24,7 @@ services:
     # command: >
     #   -addr :5001
     #   -dataset /data/dataset.db
+    #   -dataset-url https://github.com/NC1107/lidarr-metadata-provider/releases/latest/download/dataset.db
     #   -fallback
     #   -contact you@example.com
 

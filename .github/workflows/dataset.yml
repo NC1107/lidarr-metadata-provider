@@ -70,7 +70,18 @@ jobs:
         run: sudo apt-get install -y lbzip2
 
       - name: Build tools
-        run: go build -o bin/pipeline ./cmd/pipeline
+        run: |
+          go build -o bin/pipeline ./cmd/pipeline
+          go build -o bin/enrich ./cmd/enrich
+
+      # The biography cache persists between runs so a build only fetches
+      # articles that are new or changed, rather than all ~190k every time.
+      - name: Restore enrichment cache
+        uses: actions/cache@v4
+        with:
+          path: enrich
+          key: enrich-${{ github.run_id }}
+          restore-keys: enrich-
 
       - name: Resolve export
         id: export
@@ -92,7 +103,7 @@ jobs:
           set -euo pipefail
           UA="LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
           mkdir -p dumps && cd dumps
-          for f in mbdump.tar.bz2 mbdump-derived.tar.bz2 SHA256SUMS; do
+          for f in mbdump.tar.bz2 mbdump-derived.tar.bz2 mbdump-cover-art-archive.tar.bz2 SHA256SUMS; do
             curl -fsSL -A "$UA" -O "${{ steps.export.outputs.base }}/$f"
           done
           ls -lh
@@ -100,13 +111,22 @@ jobs:
       # A truncated download does not announce itself. It produces a dataset
       # quietly missing rows, which is worse than a build that fails.
       - name: Verify download
-        run: ./bin/pipeline verify dumps/SHA256SUMS dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2
+        run: ./bin/pipeline verify dumps/SHA256SUMS dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2 dumps/mbdump-cover-art-archive.tar.bz2
+
+      # Gathers artist images and biographies from Wikidata and Wikipedia. The
+      # restored cache makes this a quick delta on most runs.
+      - name: Enrich
+        run: |
+          set -euo pipefail
+          ./bin/enrich -out enrich/artists.jsonl \
+            -contact "https://github.com/${{ github.repository }}"
 
       - name: Build dataset
         run: |
           set -euo pipefail
           /usr/bin/time -v ./bin/pipeline build \
             dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2 dataset.db \
+            dumps/mbdump-cover-art-archive.tar.bz2 enrich/artists.jsonl \
             2>&1 | tee build.log | grep -Ev "^\s" || true
           grep -E "Maximum resident|Elapsed \(wall" build.log || true
 
@@ -115,13 +135,17 @@ jobs:
       - name: Free the archives
         run: rm -rf dumps && df -h / | tail -1
 
-      - name: Checksum
+      # A full dataset exceeds a single GitHub release asset, so it is split
+      # into parts with a manifest and a whole-file checksum. The server
+      # rejoins and verifies them; see internal/dataset/fetch.go.
+      - name: Package
         id: artifact
         run: |
           set -euo pipefail
-          sha256sum dataset.db | awk '{print $1}' > dataset.db.sha256
+          ./scripts/package-dataset.sh dataset.db release
           echo "size=$(du -h dataset.db | cut -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha=$(cat dataset.db.sha256)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(awk '{print $1}' release/dataset.db.sha256)" >> "$GITHUB_OUTPUT"
+          echo "parts=$(wc -l < release/dataset.db.parts)" >> "$GITHUB_OUTPUT"
 
       # Proves the artifact opens and answers before anyone downloads it. A
       # dataset that builds but cannot be served is worse than a failed build,
@@ -148,24 +172,23 @@ jobs:
           TAG="dataset-${{ steps.export.outputs.stamp }}"
           gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$(cat <<EOF
           Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`.
+          Enriched with artist images and biographies from Wikidata and Wikipedia; see \`docs/DATA_SOURCES.md\` for provenance and licensing.
 
           | | |
           | --- | --- |
           | Size | ${{ steps.artifact.outputs.size }} |
+          | Parts | ${{ steps.artifact.outputs.parts }} |
           | SHA-256 | \`${{ steps.artifact.outputs.sha }}\` |
 
-          The container downloads and verifies this automatically. To use it
-          directly, point the server at the file:
-
-          \`\`\`
-          lidarr-metadata-provider -dataset dataset.db
-          \`\`\`
+          The container downloads, rejoins and verifies this automatically.
+          The dataset is published in parts because it exceeds a single release
+          asset; the server reads \`dataset.db.parts\` and fetches the rest.
 
           Prefer not to depend on these builds? The pipeline that produced
           this ships in the same image, see \`docs/BUILDING.md\`.
           EOF
           )" || echo "release exists, updating assets"
-          gh release upload "$TAG" dataset.db dataset.db.sha256 --clobber
+          gh release upload "$TAG" release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256 --clobber
 
       - name: Build log
         if: always()

@@ -41,7 +41,22 @@ func Fetch(ctx context.Context, url, dest string, log *slog.Logger) error {
 	log.Info("downloading dataset", "url", url, "to", dest)
 	start := time.Now()
 
-	size, err := download(ctx, url, staged, log)
+	// A full dataset is larger than a GitHub release asset may be, so it is
+	// published as parts listed in a manifest beside it. When that manifest is
+	// present the parts are fetched and joined; when it is absent the url is a
+	// single file, which keeps older releases and any other host working.
+	parts, multipart, err := fetchManifest(ctx, url+partsSuffix)
+	if err != nil {
+		return fmt.Errorf("dataset: reading part manifest: %w", err)
+	}
+
+	var size int64
+	if multipart {
+		log.Info("dataset is published in parts", "count", len(parts))
+		size, err = downloadParts(ctx, url, parts, staged, log)
+	} else {
+		size, err = download(ctx, url, staged, log)
+	}
 	if err != nil {
 		os.Remove(staged)
 		return fmt.Errorf("dataset: downloading %s: %w", url, err)
@@ -64,6 +79,73 @@ func Fetch(ctx context.Context, url, dest string, log *slog.Logger) error {
 
 // checksumSuffix names the digest published beside a dataset artifact.
 const checksumSuffix = ".sha256"
+
+// partsSuffix names the manifest that, when present beside a dataset url, lists
+// the ordered parts the artifact was split into.
+const partsSuffix = ".parts"
+
+// fetchManifest reads a parts manifest if one exists. A 404 means the artifact
+// is a single file, which is not an error; any other failure is.
+func fetchManifest(ctx context.Context, url string) (parts []string, found bool, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("HTTP %s for %s", resp.Status, url)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, false, err
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		// Tolerate a "sha256  name" manifest as well as a bare list, taking the
+		// last field so either form yields the part filename.
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		parts = append(parts, fields[len(fields)-1])
+	}
+	if len(parts) == 0 {
+		return nil, false, fmt.Errorf("part manifest %s is empty", url)
+	}
+	return parts, true, nil
+}
+
+// downloadParts fetches each part in order and joins them into one staged file.
+// The parts sit beside the dataset url, so their addresses are the dataset url
+// with its last path segment replaced by the part name. The whole is verified
+// against the published checksum afterwards, so a dropped or reordered part is
+// caught before it is served.
+func downloadParts(ctx context.Context, url string, parts []string, dest string, log *slog.Logger) (int64, error) {
+	base := url[:strings.LastIndex(url, "/")+1]
+
+	f, err := os.Create(dest)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	var total int64
+	for i, part := range parts {
+		log.Info("downloading dataset part", "part", i+1, "of", len(parts), "name", part)
+		n, err := downloadInto(ctx, base+part, f, log)
+		if err != nil {
+			return total, fmt.Errorf("part %s: %w", part, err)
+		}
+		total += n
+	}
+	return total, f.Sync()
+}
 
 func fetchChecksum(ctx context.Context, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+checksumSuffix, nil)
@@ -91,6 +173,22 @@ func fetchChecksum(ctx context.Context, url string) (string, error) {
 }
 
 func download(ctx context.Context, url, dest string, log *slog.Logger) (int64, error) {
+	f, err := os.Create(dest)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	written, err := downloadInto(ctx, url, f, log)
+	if err != nil {
+		return written, err
+	}
+	return written, f.Sync()
+}
+
+// downloadInto streams one url into an already-open writer, so both a whole
+// file and a run of parts share the same transfer and progress logging.
+func downloadInto(ctx context.Context, url string, w io.Writer, log *slog.Logger) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, err
@@ -104,21 +202,11 @@ func download(ctx context.Context, url, dest string, log *slog.Logger) (int64, e
 		return 0, fmt.Errorf("HTTP %s", resp.Status)
 	}
 
-	f, err := os.Create(dest)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
 	// A multi-gigabyte download over a slow line looks identical to a hang
 	// without this.
-	written, err := io.Copy(f, &progressReader{
+	return io.Copy(w, &progressReader{
 		r: resp.Body, total: resp.ContentLength, log: log, last: time.Now(),
 	})
-	if err != nil {
-		return written, err
-	}
-	return written, f.Sync()
 }
 
 type progressReader struct {
