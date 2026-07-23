@@ -40,7 +40,13 @@ func run() error {
 	queryFile := flag.String("queries", "fixtures/search-queries.txt", "file of queries, one per line")
 	minTop1 := flag.Float64("min-top1", 0, "fail below this top-1 agreement percentage")
 	verbose := flag.Bool("v", false, "print every query, not only the disagreements")
+	deep := flag.Bool("deep", false, "field-by-field artist and album comparison instead of search parity")
+	albumsPer := flag.Int("albums-per", 3, "albums to deep-compare per artist")
 	flag.Parse()
+
+	if *deep {
+		return deepCompare(*base, diverseArtists, *albumsPer)
+	}
 
 	queries, err := readQueries(*queryFile)
 	if err != nil {
@@ -163,4 +169,18 @@ func readQueries(path string) ([]string, error) {
 		out = append(out, line)
 	}
 	return out, scanner.Err()
+}
+
+// diverseArtists spans the cases parity has to hold across: mainstream, a huge
+// catalogue, classical with performer credits, non-Latin script, a
+// single-album act, and a heavy collaborator.
+var diverseArtists = []string{
+	"a74b1b7f-71a5-4011-9441-d0b5e4122711", // Radiohead
+	"b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", // The Beatles
+	"24f1766e-9635-4d58-a4d4-9413f9f98a4c", // J.S. Bach
+	"b539e453-c4fe-47e3-8a07-8517eac74429", // Utada Hikaru
+	"ff3e88b3-7354-4f30-967c-1a61ebc8c642", // The La's
+	"73e5e69d-3554-40d8-8516-00cb38737a1c", // Rihanna
+	"9fff2f8a-21e6-47de-a2b8-7f449929d43f", // Drake
+	"83d91898-7763-47d7-b03b-b92132375c47", // Pink Floyd
 }
