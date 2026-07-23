@@ -24,6 +24,19 @@ type Metrics struct {
 	mu       sync.Mutex
 	byRoute  map[string]*routeStats
 	recentMs []float64
+	recent   []RequestLog
+}
+
+// RequestLog is one served metadata request, for the console's history view,
+// so an operator can see exactly what Lidarr asked and how it was answered.
+type RequestLog struct {
+	At     string `json:"at"`
+	Route  string `json:"route"`
+	Path   string `json:"path"`
+	Query  string `json:"query"`
+	Status int    `json:"status"`
+	Bytes  int    `json:"bytes"`
+	TookMs int64  `json:"tookMs"`
 }
 
 type routeStats struct {
@@ -40,6 +53,30 @@ const recentWindow = 512
 
 func NewMetrics() *Metrics {
 	return &Metrics{started: time.Now(), byRoute: map[string]*routeStats{}}
+}
+
+// recentMax bounds the request history kept for the console.
+const recentMax = 100
+
+// Log records one served request in the history ring.
+func (m *Metrics) Log(e RequestLog) {
+	m.mu.Lock()
+	m.recent = append(m.recent, e)
+	if len(m.recent) > recentMax {
+		m.recent = m.recent[len(m.recent)-recentMax:]
+	}
+	m.mu.Unlock()
+}
+
+// Recent returns the request history, newest first.
+func (m *Metrics) Recent() []RequestLog {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]RequestLog, len(m.recent))
+	for i, e := range m.recent {
+		out[len(m.recent)-1-i] = e
+	}
+	return out
 }
 
 // Observe records one served request.

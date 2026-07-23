@@ -93,6 +93,7 @@ func (s *Server) handleUIStatus(w http.ResponseWriter, r *http.Request) {
 		"version":  s.cfg.Version,
 		"dataset":  s.cfg.Dataset,
 		"metrics":  s.metrics.Snapshot(),
+		"recent":   s.metrics.Recent(),
 		"fallback": s.fallbackStatus(),
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -118,7 +118,13 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		s.metrics.Observe(route, time.Since(start), rec.status >= 400)
+		took := time.Since(start)
+		s.metrics.Observe(route, took, rec.status >= 400)
+		s.metrics.Log(RequestLog{
+			At: start.Format("15:04:05"), Route: route, Path: r.URL.Path,
+			Query: r.URL.RawQuery, Status: rec.status, Bytes: rec.bytes,
+			TookMs: took.Milliseconds(),
+		})
 	})
 }
 

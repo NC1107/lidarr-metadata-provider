@@ -227,6 +227,11 @@
     border-left: 3px solid var(--warn); background: var(--panel); box-shadow: var(--shadow);
     font-size: var(--fs-body); margin-bottom: 16px;
   }
+  .hist { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
+  .hist th, .hist td { padding: 7px 16px; text-align: left; border-top: 1px solid var(--line); white-space: nowrap; }
+  .hist thead th { background: var(--sunk); border-top: 0; color: var(--muted); font-weight: 600; position: sticky; top: 58px; }
+  .hist .q { white-space: normal; overflow-wrap: anywhere; color: var(--ink); }
+  .mono { font-family: var(--mono); }
   .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .items:focus-visible, details pre:focus-visible { outline-offset: -2px; }
@@ -251,6 +256,7 @@
     <div role="tablist" aria-label="Views">
       <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Search</button>
       <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
+      <button role="tab" id="tab-live" aria-controls="panel-live" aria-selected="false">Live</button>
     </div>
 
     <form class="searchbar" id="f" role="search">
@@ -309,6 +315,9 @@
   <section role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
     <div id="db"></div>
   </section>
+  <section role="tabpanel" id="panel-live" aria-labelledby="tab-live" hidden>
+    <div id="live"></div>
+  </section>
   <p id="sr-status" role="status" aria-live="polite" class="sr-only"></p>
 </main>
 
@@ -321,7 +330,7 @@ const num = (v) => (v ?? 0).toLocaleString();
 const CHECK = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 6.4l2.6 2.6L10 3.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const CROSS = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
-const TABS = [["tab-search", "panel-search"], ["tab-db", "panel-db"]];
+const TABS = [["tab-search", "panel-search"], ["tab-db", "panel-db"], ["tab-live", "panel-live"]];
 function selectTab(tab, focus) {
   for (const [t, p] of TABS) {
     const on = t === tab;
@@ -331,6 +340,7 @@ function selectTab(tab, focus) {
   }
   if (focus) $(tab).focus();
   if (tab === "tab-db") loadDatabase();
+  if (tab === "tab-live") startLive(); else stopLive();
 }
 TABS.forEach(([tab], i) => {
   $(tab).tabIndex = i === 0 ? 0 : -1;
@@ -443,15 +453,19 @@ function scoreboard(sides, verdict) {
   const row = (label, pick, fmt) => `<tr><th scope="row">${label}</th>` +
     sides.map(([, r]) => `<td>${fmt(pick(r))}</td>`).join("") + `</tr>`;
 
-  // Whether the top results agree is the one thing worth stating outright,
-  // and it belongs beside the numbers rather than above them in a banner.
+  // A compact match cell per compared source: a check when the top result
+  // agrees, a cross when it does not, with the detail on hover rather than
+  // spelled out in a banner.
   let match = "";
   if (verdict) {
-    const good = verdict.status === "good";
-    match = `<tr><th scope="row">Top result</th>` +
-      `<td colspan="${sides.length}" style="text-align:left">` +
-      `<span class="tag ${good ? "ok" : verdict.status === "bad" ? "bad" : "warn"}">` +
-      `${good ? CHECK : CROSS} ${esc(verdict.text)}</span></td></tr>`;
+    const local = sides[0][1];
+    const cells = sides.map(([kind, r], i) => {
+      if (i === 0) return `<td></td>`;
+      const agree = r.raw && local.raw && topId(r.raw) === topId(local.raw);
+      const title = agree ? "Same top result" : "Different top result: hover a row below to see the diff";
+      return `<td><span class="tag ${agree ? "ok" : "bad"}" title="${esc(title)}">${agree ? CHECK : CROSS}</span></td>`;
+    });
+    match = `<tr><th scope="row">Match</th>${cells.join("")}</tr>`;
   }
 
   return `<table class="scoreboard panel">
@@ -472,6 +486,10 @@ function flatten(v, prefix, out) {
   if (Array.isArray(v)) { out[prefix] = `[${v.length}]`; return out; }
   for (const k of Object.keys(v)) flatten(v[k], prefix ? prefix + "." + k : k, out);
   return out;
+}
+function topId(raw) {
+  const t = topOf(raw);
+  return t && t.id;
 }
 function topOf(raw) {
   const d = raw;
@@ -609,6 +627,35 @@ async function loadDatabase() {
       ${pair("Slowest 5%", ms(m.p95Ms || 0))}
     </div></section>
   </div>`;
+}
+
+// ---- Live request history ----
+let liveTimer = null;
+function stopLive() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } }
+function startLive() {
+  loadLive();
+  stopLive();
+  liveTimer = setInterval(loadLive, 2000);
+}
+async function loadLive() {
+  let s;
+  try { s = await (await fetch("/ui/status")).json(); }
+  catch (e) { return; }
+  const rows = s.recent || [];
+  const cls = (st) => st >= 500 ? "bad" : st >= 400 ? "warn" : "ok";
+  $("live").innerHTML = `<section class="panel"><h2 style="padding:14px 16px 0;margin:0">
+      What Lidarr is asking (newest first)</h2>
+    ${rows.length ? `<table class="hist"><thead><tr>
+        <th>Time</th><th>Route</th><th>Query</th><th>Status</th><th>Size</th><th>Took</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td class="mono">${esc(r.at)}</td>
+        <td class="mono">${esc(r.route)}</td>
+        <td class="mono q">${esc(decodeURIComponent(r.query || ""))}</td>
+        <td><span class="tag ${cls(r.status)}">${r.status}</span></td>
+        <td class="mono">${bytes(r.bytes)}</td>
+        <td class="mono">${ms(r.tookMs)}</td></tr>`).join("")}</tbody></table>`
+      : `<p class="empty">No requests yet. They appear here as Lidarr makes them.</p>`}
+  </section>`;
 }
 
 document.body.insertAdjacentHTML("beforeend",
