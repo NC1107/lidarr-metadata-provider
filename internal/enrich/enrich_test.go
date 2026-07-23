@@ -84,6 +84,58 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSendTitleDecodesEncoding(t *testing.T) {
+	cases := map[string]string{
+		"The_Beatles":    "The_Beatles",
+		"Sigur_R%C3%B3s": "Sigur_Rós",
+		"AC/DC":          "AC/DC",
+	}
+	for in, want := range cases {
+		if got := sendTitle(in); got != want {
+			t.Errorf("sendTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLeadParagraphKeepsFirstParagraph(t *testing.T) {
+	extract := "Radiohead are an English rock band. They formed in 1985.\nTheir second paragraph.\nA third."
+	got := leadParagraph(extract)
+	want := "Radiohead are an English rock band. They formed in 1985."
+	if got != want {
+		t.Errorf("leadParagraph = %q, want %q", got, want)
+	}
+	if leadParagraph("") != "" {
+		t.Error("empty extract should stay empty")
+	}
+}
+
+// TestResolveExtractsFollowsNormalizationAndRedirects checks a requested title
+// finds its page after the API normalises underscores and follows a redirect,
+// which is how most real titles resolve.
+func TestResolveExtractsFollowsNormalizationAndRedirects(t *testing.T) {
+	resp := &extractsResponse{}
+	resp.Query.Normalized = []titleMapping{{From: "The_Beatles", To: "The Beatles"}}
+	resp.Query.Redirects = []titleMapping{{From: "The Beatles", To: "Beatles"}}
+	resp.Query.Pages = map[string]struct {
+		Title   string `json:"title"`
+		Extract string `json:"extract"`
+	}{
+		"1": {Title: "Beatles", Extract: "The Beatles were an English rock band.\nMore."},
+		"2": {Title: "Radiohead", Extract: "Radiohead are an English rock band.\nMore."},
+	}
+
+	out := resolveExtracts([]string{"The_Beatles", "Radiohead", "Nonexistent"}, resp)
+	if got := out["The_Beatles"]; got != "The Beatles were an English rock band." {
+		t.Errorf("redirected title resolved to %q", got)
+	}
+	if got := out["Radiohead"]; got != "Radiohead are an English rock band." {
+		t.Errorf("direct title resolved to %q", got)
+	}
+	if _, ok := out["Nonexistent"]; ok {
+		t.Error("a title with no page should not appear in the result")
+	}
+}
+
 func TestLoadMissingFileIsEmpty(t *testing.T) {
 	out, err := Load(filepath.Join(t.TempDir(), "does-not-exist.jsonl"))
 	if err != nil {
