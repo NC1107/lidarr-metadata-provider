@@ -50,7 +50,7 @@ jobs:
           UA="LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
           STAMP="${{ inputs.export }}"
           if [ -z "$STAMP" ]; then
-            STAMP=$(curl -fsS -A "$UA" "$BASE/LATEST" | tr -d '\n')
+            STAMP=$(curl -fsS -A "$UA" --retry 3 --retry-delay 5 --connect-timeout 30 "$BASE/LATEST" | tr -d '\n')
           fi
           # The release is tagged by the export's date, matching what is
           # already published; the time suffix is dropped so a re-published
@@ -73,27 +73,29 @@ jobs:
     needs: check
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
-    # A full build reads two archives and writes tens of millions of staging
-    # rows. The job cap is six hours; this leaves room without hiding a hang.
-    timeout-minutes: 300
+    # A cold-cache run on 4 slower vCPUs (download + cold enrichment + build +
+    # 8.8 GB upload) can approach five hours; the job cap is six. Give it real
+    # headroom rather than a number that today's export barely fits under and
+    # next quarter's larger one will not.
+    timeout-minutes: 360
 
     steps:
       - uses: actions/checkout@v4
 
-      # Runs before Go is installed, and deliberately leaves the hosted tool
-      # directory alone. Clearing it after setup-go deletes the Go it just
-      # installed, which fails the next step with "go: command not found".
-      #
-      # A standard runner starts with roughly 21-29 GB free, and a build needs
-      # the two archives plus staging plus the output. Reclaiming the
-      # preinstalled toolchains is what makes it fit.
+      # A standard runner starts with ~21-29 GB free, but the build's peak
+      # simultaneous footprint is larger than that low end: the two archives
+      # (~7.5 GB) stay on disk for the whole build, alongside the staging DB
+      # (~7.9 GB) and the growing output (~8.8 GB), and then VACUUM in Finish()
+      # needs up to twice the database size in scratch. A thorough reclaim gets
+      # to ~45-50 GB, which fits with real margin; the previous hand-rolled
+      # rm -rf list did not.
       - name: Reclaim disk space
-        run: |
-          echo "before:"; df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /usr/local/share/boost /usr/local/lib/node_modules || true
-          sudo apt-get clean || true
-          echo "after:"; df -h / | tail -1
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false # leaving the Go toolchain in place; setup-go runs next
+          large-packages: true
+          docker-images: true
+          swap-storage: false
 
       - uses: actions/setup-go@v5
         with:
@@ -136,7 +138,11 @@ jobs:
           UA="LidarrMetadataProvider/ci ( https://github.com/${{ github.repository }} )"
           mkdir -p dumps && cd dumps
           for f in mbdump.tar.bz2 mbdump-derived.tar.bz2 mbdump-cover-art-archive.tar.bz2 SHA256SUMS; do
-            curl -fsSL -A "$UA" -O "${{ steps.export.outputs.base }}/$f"
+            # A stalled transfer (not a clean failure, just no progress) would
+            # otherwise burn the whole job budget; bound and retry it.
+            curl -fsSL -A "$UA" --retry 3 --retry-delay 5 \
+              --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
+              -O "${{ steps.export.outputs.base }}/$f"
           done
           ls -lh
 
@@ -154,12 +160,21 @@ jobs:
             -contact "https://github.com/${{ github.repository }}"
 
       - name: Build dataset
+        # The measured peak is ~12.6 GB; the pipeline's own default soft limit
+        # is 10 GB, which on a 16 GB runner would make the GC spin against a
+        # target it cannot reach. Give it the same 13 GB used successfully off
+        # CI, leaving headroom for the OS and the encoder pool.
+        env:
+          LMP_MEMORY_LIMIT_GB: "13"
         run: |
           set -euo pipefail
+          # The || true must scope to grep alone (it returns 1 on no match);
+          # under pipefail a bare trailing || true would also swallow a crash
+          # or OOM of pipeline build itself and report the step green.
           /usr/bin/time -v ./bin/pipeline build \
             dumps/mbdump.tar.bz2 dumps/mbdump-derived.tar.bz2 dataset.db \
             dumps/mbdump-cover-art-archive.tar.bz2 enrich/artists.jsonl \
-            2>&1 | tee build.log | grep -Ev "^\s" || true
+            2>&1 | tee build.log | { grep -Ev "^\s" || true; }
           grep -E "Maximum resident|Elapsed \(wall" build.log || true
 
       # The archives are the largest thing on disk and are finished with by
@@ -186,6 +201,19 @@ jobs:
         run: |
           set -euo pipefail
           go build -o bin/server ./cmd/lidarr-metadata-provider
+          # A floor check on the totals catches a build that emitted far too
+          # few rows (a silently dropped table) even though it opens and serves.
+          ./bin/pipeline stats dataset.db | tee stats.txt
+          python3 - stats.txt <<'PY'
+          import re, sys
+          text = open(sys.argv[1]).read()
+          nums = [int(x.replace(',', '')) for x in re.findall(r'([\d,]+) (?:artists|albums|tracks)', text)]
+          artists, albums, tracks = (nums + [0, 0, 0])[:3]
+          assert artists > 2_000_000, f"too few artists: {artists}"
+          assert albums > 3_000_000, f"too few albums: {albums}"
+          assert tracks > 40_000_000, f"too few tracks: {tracks}"
+          print(f"floor check ok: {artists} artists, {albums} albums, {tracks} tracks")
+          PY
           ./bin/server -dataset dataset.db -addr :5001 &
           for i in $(seq 30); do
             curl -fsS http://127.0.0.1:5001/ >/dev/null 2>&1 && break || sleep 1
@@ -196,13 +224,17 @@ jobs:
           kill %1
 
       - name: Publish
-        if: inputs.publish != false
+        # inputs.publish is null on a schedule trigger, and GitHub coerces both
+        # null and false to 0, so a bare `inputs.publish != false` is false for
+        # every cron run and the dataset silently never publishes. Only treat it
+        # as a veto when it was actually supplied, on a manual dispatch.
+        if: github.event_name != 'workflow_dispatch' || inputs.publish != false
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="${{ needs.check.outputs.tag }}"
-          gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$(cat <<EOF
+          NOTES="$(cat <<EOF
           Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`.
           Enriched with artist images and biographies from Wikidata and Wikipedia; see \`docs/DATA_SOURCES.md\` for provenance and licensing.
 
@@ -219,7 +251,13 @@ jobs:
           Prefer not to depend on these builds? The pipeline that produced
           this ships in the same image, see \`docs/BUILDING.md\`.
           EOF
-          )" || echo "release exists, updating assets"
+          )"
+          # Create the release if it is new; if it already exists (a corrected
+          # same-day rebuild), refresh its title and notes too, not only its
+          # assets, so a re-publish does not leave the superseded stamp showing.
+          if ! gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"; then
+            gh release edit "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES"
+          fi
           gh release upload "$TAG" release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256 --clobber
 
       - name: Build log
