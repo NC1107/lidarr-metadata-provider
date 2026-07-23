@@ -8,11 +8,12 @@ This is that server, except you run it.
 
 ## Status
 
-Early. The server runs and answers every route lidarr calls, but there's no dataset behind it yet, so right now it only works in fallback mode against musicbrainz.
+Working. The server answers every route lidarr calls, and the pipeline that turns musicbrainz dumps into a dataset is done.
+A full build covers about 2.9 million artists, 4.4 million albums and 57 million tracks, with artist images and biographies from wikidata and wikipedia, album ratings, and cover art folded in.
 
 The contract is pinned, meaning the response shapes lidarr expects are ported to go structs and checked against golden responses captured from the live service.
-Next up is the pipeline that turns musicbrainz dumps into the dataset.
-`docs/PLAN.md` has the actual phase list if you want the detail.
+On the things that make an import work, tracks, releases, album coverage, it measures on par with or ahead of the official service; see [docs/PARITY.md](docs/PARITY.md).
+The data sources and their licenses are in [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md), and `docs/PLAN.md` has the phase list if you want the detail.
 
 ## How it's meant to work
 

@@ -1,6 +1,7 @@
 # lidarr-metadata-provider - validated project plan
 
 Status: plan validated against Lidarr source (`Lidarr/Lidarr` develop branch) and the live `api.lidarr.audio` service on 2026-07-22.
+Phases 0-4 done as of 2026-07-23 (pipeline builds a full enriched dataset, search at 95.6% top-1, dataset published/fetched in parts); the week-long real-Lidarr soak is the remaining gate.
 Name: **lidarr-metadata-provider** (working name, matches Lidarr's own terminology - the config section is literally called `metadataprovider`).
 Community precedent says a "lidarr-" prefixed descriptive name is fine (lidmeta, lidatube, docker-lidarr-extended all exist); a cuter brand can come later without breaking anything.
 
@@ -114,8 +115,10 @@ Contract facts established by the port (see `internal/skyhook/resources.go` doc 
 - Open question #3 (empty-vs-absent) and #5 (which fields Lidarr reads) are now answered mechanically.
 Dev tooling: `cmd/probe` queries any metadata server base (live upstream by default, ours later via `-base`), prints responses, saves exact-byte fixtures, and reports contract drift via `skyhook.ContractDiff` - the same differ the fixture tests use, which Phase 2's gate will reuse against our server.
 
-**Phase 1 - dump → dataset.**
-MusicBrainz dump ingest → precomputed artist/album JSON payloads + FTS index → single versioned artifact (target: well under 30 GB; drop every field the DTOs prove Lidarr never reads - open question #5 is now answerable mechanically from the DTO port).
+**Phase 1 - dump → dataset (DONE).**
+MusicBrainz dump ingest → precomputed artist/album JSON payloads + FTS index → single versioned artifact.
+Full build: 2.9 M artists, 4.4 M albums, 57 M tracks, ~8 GB, ~34 min on 8 cores, ~12.5 GB peak.
+Genres, links and cover art are extracted from the export; artist images and biographies are folded in from a build-time enrichment pass (Wikidata + Wikipedia, see the enrichment note below and `docs/DATA_SOURCES.md`); album ratings come from `release_group_meta`.
 
 Inputs settled during the Phase 0 wrap-up (2026-07-22):
 
@@ -130,14 +133,15 @@ Inputs settled during the Phase 0 wrap-up (2026-07-22):
 - Own dump reader (open question #4 above).
 - **Hard requirement from Lidarr's client-side filter: populate `ReleaseStatuses` on every skeletal album** (needs a release → release_group join). Empty means the album is invisible under every metadata profile. Full rule in CLAUDE.md, "Client-side album filtering".
 - Gate for this phase should include the profile-survivor counts in that section (Beatles 18/1019 etc.), not just payload equality - it is the number the user actually sees.
-- Prerequisite not yet resolved: enrichment credentials (TheAudioDB / fanart.tv) for images and overviews. Core MB data does not need them; images and overviews do. Decide whether v1 ships thin (README already allows this) or we obtain keys first.
+- **Enrichment resolved (2026-07-23): images and biographies come from Wikidata + Wikipedia, not TheAudioDB/fanart.tv.** No API key, both CC0/open, joined to MusicBrainz by MBID through Wikidata's P434. Wikidata gives a Wikimedia Commons image and the English Wikipedia article; Wikipedia gives the article's lead paragraph. Both are gathered at build time by `cmd/enrich` into an MBID-keyed cache that only refetches changed articles. Spotify/Last.fm/TheAudioDB were ruled out for shipped content: their terms restrict redistributing data into a public artifact, where Wikidata/Wikipedia do not (Wikipedia is CC BY-SA, attributed). Coverage: ~330 k artists have an image or biography; the middle band of artists on TheAudioDB but not Wikipedia stays a future "+TheAudioDB fill" option.
 - **Two of the four "missing" fields are not enrichment at all and should be built from the dumps.** The console's field diff against the live service (2026-07-22) shows our payloads carry `genres: []`, `links: []`, `images: []` and `overview: null` where upstream has 18 genres, 57 links, 4 images and a biography.
   `genre`, `tag`, `artist_tag`, `release_group_tag`, `url` and `l_artist_url` are all present in the export, so genres and links are ours to extract and simply have not been wired up.
   Only images and overviews genuinely require third-party enrichment, because MusicBrainz carries neither.
 - **Never build a pipeline step on the MusicBrainz web service.** Its rate limit is 1 request/second per source IP, enforced by dropping 100% of requests once you exceed it, and no User-Agent changes that: the UA, IP and global checks are sequential and independent. At 1 req/s a million lookups take ~12 days, so any API-driven bulk step is dead on arrival. Bulk data comes from the dumps (plain HTTPS file downloads from data.metabrainz.org, not rate limited); if we ever need queryable MB at volume, run a local mirror with `metabrainz/musicbrainz-docker` and the Live Data Feed. The web service is for ad-hoc lookups only, at <= 1 req/s with a contactable UA.
 
-**Phase 2 - serve artist/album.**
+**Phase 2 - serve artist/album (DONE).**
 Gate: byte-semantic equality with fixtures via a differ (ignores key order, catches missing keys/casing/type drift).
+Both artist and album payloads are built and served from the dataset; the album build stages ~35 M track rows through SQLite. A serve-time and build-time safeguard guarantees every track's artist appears in its album's artist list, so Lidarr does not discard an album with a guest performer.
 
 Artist path done 2026-07-22, measured against the real 20260718 export:
 
@@ -153,15 +157,17 @@ Still the real difficulty; Solr is the incumbent.
 
 Measured 2026-07-22 on the artist dataset: **57.8% top-1, 82.2% top-5** over 45 deliberately awkward queries.
 The failures were one pattern rather than noise: bm25 relevance does not know that an exact name is what a user means, so "Yes Yes Yes" outranked "Yes" and "The THE BAND Band" outranked "The Band".
-Staged ranking (exact, then all terms, then any term) with normalised names on both sides and album count as a notability tiebreak is in; awaiting re-measurement on the rebuilt dataset.
+Staged ranking (exact, then all terms, then any term) with normalised names on both sides and album count as a notability tiebreak is in.
+Re-measured on the full dataset: **95.6% top-1** over the awkward-query list.
 
-**Phase 4 - package (built 2026-07-22, gate not yet run).**
+**Phase 4 - package (DONE, soak in progress).**
 Single container + first-boot dataset fetch + `switch.sh` (the REST PUT above, with GET-merge and revert mode).
 Gate: one week against a real Lidarr instance - add artist, monitor album, refresh, import, nothing corrupts.
 
-Built: 44.7 MB image carrying both the server and the pipeline, dataset on a volume, checksum-verified first-boot download that leaves the previous dataset in place on a bad transfer, `compose.yaml`, and `switch.sh` which refuses to repoint Lidarr at a server that is not answering.
-Automated builds land in `.github/workflows/dataset.yml`, on a cron after each MusicBrainz export, so no artifact is ever produced by hand.
-The soak test against a real Lidarr has not happened and is the gate that actually matters before anyone else uses this.
+Built: a small image carrying both the server and the pipeline, dataset on a volume, checksum-verified first-boot download that leaves the previous dataset in place on a bad transfer, `compose.yaml`, and `switch.sh` which refuses to repoint Lidarr at a server that is not answering.
+A full dataset exceeds a single GitHub release asset, so it is published in parts with a manifest; the server rejoins and verifies them (`internal/dataset/fetch.go`, `scripts/package-dataset.sh`).
+Automated builds land in `.github/workflows/dataset.yml`, after each MusicBrainz export, so no artifact is ever produced by hand.
+The soak test against a real Lidarr on 10.0.0.100 is running; it is the gate that actually matters before anyone else uses this.
 
 **Phase 5 - ship.**
 One r/selfhosted post.

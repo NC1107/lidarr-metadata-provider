@@ -6,8 +6,9 @@ End-user experience: run one Docker container, point Lidarr's `metadataSource` a
 
 Read `docs/PLAN.md` before doing anything substantial.
 It contains the full validated plan, phase gates, and risk table.
-Current phase: **Phase 1 (dump → dataset)**.
-Phase 0 is done: the DTOs are ported to `internal/skyhook` and the fixture set is complete; `go test ./...` round-trips every fixture through the structs.
+Current phase: **Phase 4 (package) done, soak in progress**.
+Phases 0-3 are done: contract pinned, the pipeline builds a full enriched dataset (artist/album payloads, genres, links, cover art, plus images/biographies from Wikidata+Wikipedia and album ratings), search is at 95.6% top-1 parity, and the dataset is published/fetched in parts.
+The remaining gate is the week-long soak against a real Lidarr (10.0.0.100).
 
 ## Non-negotiable rules
 
