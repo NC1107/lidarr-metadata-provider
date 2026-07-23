@@ -58,7 +58,7 @@ func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (
 // multi-hour unattended build, the same way the Wikipedia fetch already guards
 // itself.
 func harvestPrefixRetry(client *http.Client, userAgent, prefix string) (map[string]*Artist, error) {
-	const maxAttempts = 4
+	const maxAttempts = 7
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		rows, err := harvestPrefix(client, userAgent, prefix)
@@ -66,9 +66,17 @@ func harvestPrefixRetry(client *http.Client, userAgent, prefix string) (map[stri
 			return rows, nil
 		}
 		lastErr = err
-		time.Sleep(time.Duration(attempt+1) * 5 * time.Second)
+		// The Wikidata Query Service throttles shared CI IPs, returning 429s and
+		// empty or truncated 200 bodies (which parse as "unexpected end of JSON
+		// input"). A brief hiccup can last a minute or two, so back off well past
+		// it - up to ~90s a try - before giving up on a prefix.
+		backoff := time.Duration(attempt+1) * 15 * time.Second
+		if backoff > 90*time.Second {
+			backoff = 90 * time.Second
+		}
+		time.Sleep(backoff)
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("after %d attempts: %w", maxAttempts, lastErr)
 }
 
 // sparqlResults is the shape of a SPARQL JSON result set, narrowed to the

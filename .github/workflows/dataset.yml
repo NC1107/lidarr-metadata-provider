@@ -154,11 +154,22 @@ jobs:
       # Gathers artist images and biographies from Wikidata and Wikipedia. The
       # restored cache makes this a quick delta on most runs.
       - name: Enrich
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # On a cold cache actions/cache does not create the path, so make it
           # before enrich writes its checkpoints there.
           mkdir -p enrich
+          # Seed the cache from the published enrich-cache asset when the actions
+          # cache missed, so a cold run does a quick delta instead of re-fetching
+          # ~180k biographies and over-exposing itself to Wikidata throttling.
+          if [ ! -f enrich/artists.jsonl ]; then
+            gh release download enrich-cache -R "${{ github.repository }}" \
+              --pattern artists.jsonl --dir enrich 2>/dev/null \
+              && echo "seeded enrichment from enrich-cache" \
+              || echo "no seed available; enriching from scratch"
+          fi
           ./bin/enrich -out enrich/artists.jsonl \
             -contact "https://github.com/${{ github.repository }}"
 
