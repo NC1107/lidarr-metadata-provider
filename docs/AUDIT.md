@@ -3,7 +3,15 @@
 Five independent audits ran against the repo, the real 8.73 GB dataset (`full-enriched-v2.db`), the live soak server, the golden fixtures, and the actual MusicBrainz dumps: an adversarial CI audit, a build performance audit, an adversarial data-correctness audit, a code quality review, and a dataset size audit.
 Everything below was verified against real code, real data, or a working prototype - findings the auditors could not substantiate were dropped, and two audits independently confirmed the same `DictBuilder` bug.
 This file is the backlog: each item has evidence, a concrete fix, and an effort tag (S/M/L).
-Nothing here has been fixed yet unless struck through.
+
+## Resolved 2026-07-23
+
+The first pass fixed every P0 and P1, plus the safe size and robustness wins.
+Items 1-10, 14, 15, 16, 19, 20, 25, and the linkType half of 26 are done and shipped, each with a regression test where one applied:
+the fallback safeguard, the biography-fetch data race, the DictBuilder failure handling, genre casing and link typing, the dead maps, BetterCompression, atomic build output, the resilient download, and the server and CI hardening.
+
+Still open, in rough priority: the schema-changing size wins (12 FTS external content, 18 mbid blobs) and the larger memory and speed work (13 stage releases, 17 parallel emit, 11 transport compression) which want their own focused changes and a search-parity run; the smaller correctness items (22 search-hint aliases, 23 tar-order guards, 24 statusMask logging); the metrics wiring (21); the design work (28-30); and the doc pass (27).
+Item 12 was deliberately deferred because it changes the schema, which would make an updated server refuse an existing on-disk dataset; it needs a re-download-on-mismatch migration path first.
 
 Headline numbers if the backlog lands:
 

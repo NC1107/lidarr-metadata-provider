@@ -122,12 +122,14 @@ Measured on 8 cores against the 20260718 export:
 
 | | |
 | --- | --- |
-| Archives to download | 7.4 GB |
-| Scratch space during the build | several GB beside the output, removed afterwards |
-| Peak memory | around 6 GB |
-| Output | a single file of a few GB |
+| Archives to download | 7.5 GB |
+| Scratch space during the build | roughly 8 GB beside the output, removed afterwards |
+| Peak memory | around 13 GB (cap it with `LMP_MEMORY_LIMIT_GB`) |
+| Output | a single file of roughly 9 GB |
+| Wall clock | around 35 minutes on 8 fast cores |
 
-The scratch space holds tracks and recordings, roughly 35 million and 30 million rows, which are the only tables too large to keep in memory.
+Give the build a machine with 16 GB or more; the peak working set is about 13 GB and the default memory cap is 13 GB, which you can lower with `LMP_MEMORY_LIMIT_GB` on a smaller box at the cost of harder garbage collection.
+The scratch space holds tracks and recordings, roughly 57 million and 40 million rows, which are the only tables too large to keep in memory.
 
 ## If a build refuses to start
 
