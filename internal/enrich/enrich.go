@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -71,6 +72,14 @@ func Load(path string) (map[string]*Artist, error) {
 // temporary file and renames, so an interrupted save cannot corrupt the cache
 // a future build depends on.
 func Save(path string, artists map[string]*Artist) error {
+	// Create the output directory: on a cold CI cache the enrich/ dir does not
+	// exist yet, and without this every checkpoint and the final write fail
+	// with "no such file or directory", losing the whole fetch.
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {

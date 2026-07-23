@@ -102,6 +102,23 @@ func TestLoadSaveRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveCreatesMissingDir guards the cold-cache CI failure: on a cache miss
+// the enrich/ output dir does not exist, and Save must create it rather than
+// fail every checkpoint with "no such file or directory".
+func TestSaveCreatesMissingDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "enrich", "artists.jsonl")
+	if err := Save(path, map[string]*Artist{"a": {MBID: "a", Overview: "bio"}}); err != nil {
+		t.Fatalf("Save into a missing directory: %v", err)
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["a"] == nil || out["a"].Overview != "bio" {
+		t.Errorf("round-tripped entry = %+v", out["a"])
+	}
+}
+
 func TestSendTitleDecodesEncoding(t *testing.T) {
 	cases := map[string]string{
 		"The_Beatles":    "The_Beatles",

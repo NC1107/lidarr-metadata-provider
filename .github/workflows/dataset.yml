@@ -156,6 +156,9 @@ jobs:
       - name: Enrich
         run: |
           set -euo pipefail
+          # On a cold cache actions/cache does not create the path, so make it
+          # before enrich writes its checkpoints there.
+          mkdir -p enrich
           ./bin/enrich -out enrich/artists.jsonl \
             -contact "https://github.com/${{ github.repository }}"
 
