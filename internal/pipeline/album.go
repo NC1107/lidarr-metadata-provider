@@ -294,7 +294,20 @@ func (c *collector) emitAlbums(emit func(*skyhook.AlbumResource) error) error {
 			return err
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// The release-level joins are finished once every album is emitted. The
+	// artist pass that runs next reads c.groups but none of these, so free
+	// them (~2 GB) rather than hold them flat through both phases.
+	c.releaseByID = nil
+	c.releasesByRG = nil
+	c.mediumToGroup = nil
+	c.mediumFormats = nil
+	c.labelNames = nil
+	c.countryCodes = nil
+	c.pendingMedia = nil
+	return nil
 }
 
 // trackStream hands out one album's tracks at a time from a single forward

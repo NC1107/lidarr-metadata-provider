@@ -130,6 +130,10 @@ func scan(core, derived *mbdump.Archive, want map[string]bool, stagingPath strin
 	if err := derived.ReadTables(c.derivedHandlers()); err != nil {
 		return nil, err
 	}
+	// These only filter rows during the scan; once both archives are read they
+	// are dead weight held for the rest of the build, so release them now.
+	c.neededURLs = nil
+	c.neededTags = nil
 	return c, nil
 }
 
@@ -216,8 +220,7 @@ type collector struct {
 	// a release group can be attributed without holding every credit.
 	creditArtists map[int][]int
 
-	groups   map[int]*groupRow
-	groupIDs map[int]bool
+	groups map[int]*groupRow
 
 	// rgStatuses covers every release group, because release rows arrive
 	// before the release groups they belong to.
@@ -278,7 +281,6 @@ func newCollector(want map[string]bool) *collector {
 		artistIDByGID:  map[string]int{},
 		creditArtists:  map[int][]int{},
 		groups:         map[int]*groupRow{},
-		groupIDs:       map[int]bool{},
 		rgStatuses:     map[int]statusMask{},
 		artistTypes:    map[int]string{},
 		primaryTypes:   map[int]string{},
@@ -516,7 +518,6 @@ func (c *collector) readReleaseGroup(row []mbdump.Field) error {
 		oldIDs:    []string{},
 		artistIDs: append([]int(nil), artistIDs...),
 	}
-	c.groupIDs[id] = true
 	for _, artistID := range artistIDs {
 		c.artistsByID[artistID].groups = append(c.artistsByID[artistID].groups, id)
 	}
