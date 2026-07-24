@@ -273,8 +273,10 @@ jobs:
           # sidesteps all of it. The delete keeps the underlying git tag, and
           # create uploads the parts atomically with the release.
           gh release delete "$TAG" --yes 2>/dev/null || true
+          # part[0-9]* matches the numbered parts only; a bare part* also matches
+          # the "parts" manifest, listing it twice and 422ing on the re-add.
           gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES" \
-            release/dataset.db.part* release/dataset.db.parts release/dataset.db.sha256
+            release/dataset.db.part[0-9]* release/dataset.db.parts release/dataset.db.sha256
 
       - name: Build log
         if: always()
