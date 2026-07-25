@@ -520,9 +520,15 @@ func (c *collector) readReleaseGroup(row []mbdump.Field) error {
 		oldIDs:    []string{},
 		artistIDs: append([]int(nil), artistIDs...),
 	}
-	for _, artistID := range artistIDs {
-		c.artistsByID[artistID].groups = append(c.artistsByID[artistID].groups, id)
-	}
+	// A release group belongs in an artist's discography only when that artist
+	// leads the credit. The official service lists a collaboration under its
+	// primary artist alone; listing it under every credited artist makes Lidarr
+	// treat the foreign lead as a missing parent and auto-add, monitor, and
+	// search it on refresh, which cascades across the whole collaboration graph.
+	// The lead is the first credited artist, the same one album() serves as the
+	// album's artistid, so discography membership and artistid stay consistent.
+	lead := artistIDs[0]
+	c.artistsByID[lead].groups = append(c.artistsByID[lead].groups, id)
 	return nil
 }
 

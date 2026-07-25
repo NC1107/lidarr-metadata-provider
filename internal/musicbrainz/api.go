@@ -115,6 +115,16 @@ func (c *Client) Artist(ctx context.Context, mbid string) (*skyhook.ArtistResour
 	return &artist, nil
 }
 
+// creditLeadIs reports whether mbid leads the release group's credit. An absent
+// credit counts as a match so an artist's own releases are never dropped when
+// MusicBrainz omits the credit from a response.
+func creditLeadIs(rg *mbReleaseGroup, mbid string) bool {
+	if len(rg.ArtistCredit) == 0 || rg.ArtistCredit[0].Artist == nil {
+		return true
+	}
+	return strings.EqualFold(rg.ArtistCredit[0].Artist.ID, mbid)
+}
+
 // browseArtistReleases walks the artist's releases, collecting each distinct
 // release group and the statuses its releases carry.
 func (c *Client) browseArtistReleases(ctx context.Context, mbid string) (map[string]*mbReleaseGroup, map[string]map[string]bool, error) {
@@ -124,7 +134,7 @@ func (c *Client) browseArtistReleases(ctx context.Context, mbid string) (map[str
 	for page := 0; page < c.maxPages(); page++ {
 		params := url.Values{}
 		params.Set("artist", mbid)
-		params.Set("inc", "release-groups")
+		params.Set("inc", "release-groups+artist-credits")
 		params.Set("limit", strconv.Itoa(pageSize))
 		params.Set("offset", strconv.Itoa(page*pageSize))
 
@@ -135,6 +145,15 @@ func (c *Client) browseArtistReleases(ctx context.Context, mbid string) (map[str
 		for i := range resp.Releases {
 			r := &resp.Releases[i]
 			if r.ReleaseGroup == nil {
+				continue
+			}
+			// A release group belongs in this artist's discography only when the
+			// artist leads its credit. A guest credit on a collaboration would
+			// otherwise make Lidarr treat the album's foreign lead as a missing
+			// parent and auto-add, monitor, and search it on refresh, cascading
+			// across the collaboration graph. This matches both the built
+			// dataset and the upstream service.
+			if !creditLeadIs(r.ReleaseGroup, mbid) {
 				continue
 			}
 			id := r.ReleaseGroup.ID
