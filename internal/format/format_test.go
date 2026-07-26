@@ -63,7 +63,7 @@ func TestLinkTypeMatchesUpstream(t *testing.T) {
 }
 
 // TestPrimaryTypeOrOther pins the untyped-release-group default, whose absence
-// on the fallback path made untyped albums unmonitorable (AUDIT.md 31).
+// on the fallback path made untyped albums unmonitorable.
 func TestPrimaryTypeOrOther(t *testing.T) {
 	cases := map[string]string{"": "Other", "Album": "Album", "EP": "EP"}
 	for in, want := range cases {

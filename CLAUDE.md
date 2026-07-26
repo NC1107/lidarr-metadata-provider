@@ -4,11 +4,8 @@ A drop-in, self-hostable replacement for Lidarr's cloud metadata server (`api.li
 Built from MusicBrainz CC0 dumps, preprocessed into a compact dataset at build time, served by a small stateless Go binary.
 End-user experience: run one Docker container, point Lidarr's `metadataSource` at it, done.
 
-Read `docs/PLAN.md` before doing anything substantial.
-It contains the full validated plan, phase gates, and risk table.
-Current phase: **Phase 4 (package) done, soak in progress**.
-Phases 0-3 are done: contract pinned, the pipeline builds a full enriched dataset (artist/album payloads, genres, links, cover art, plus images/biographies from Wikidata+Wikipedia and album ratings), search is at 95.6% top-1 parity, and the dataset is published/fetched in parts.
-The remaining gate is the week-long soak against a real Lidarr (10.0.0.100).
+The project has shipped and is in beta.
+The contract is pinned, the pipeline builds a full enriched dataset (artist/album payloads, genres, links, cover art, plus images/biographies from Wikidata+Wikipedia and album ratings), search is at 95.6% top-1 parity, the dataset is published and fetched in parts from GitHub Releases, and the container image is public.
 
 ## Non-negotiable rules
 
@@ -121,7 +118,7 @@ Two hard-won rules when touching anything that talks to MusicBrainz:
    Use `musicbrainz.UserAgent`, which is pinned to `LidarrMetadataProvider/<version> ( <contact> )` and guarded by a test.
    Renaming that token to match the repository name would silently break fallback for every user.
 
-Dataset freshness is also configurable rather than fixed, because dataset downloads are the project's real bandwidth cost; see `docs/PLAN.md` section 9.
+Dataset freshness is also configurable rather than fixed, because dataset downloads are the project's real bandwidth cost.
 
 ## Stack
 
@@ -132,7 +129,6 @@ Dataset freshness is also configurable rather than fixed, because dataset downlo
 
 ## Layout
 
-- `docs/PLAN.md` - the validated plan; keep it current when decisions change.
 - `fixtures/v0.4/` - golden responses; never regenerate from our own server, only from the live upstream. `README.md` there documents provenance.
 - `internal/skyhook/` - the ported SkyHook contract structs, `ContractDiff` (the semantic differ), and fixture round-trip tests (Phase 0).
 - `cmd/probe` - dev CLI: query any metadata server (`-base`, live upstream by default), pretty-print or `-save` exact-byte fixtures, and report contract drift against the structs on every response. `go run ./cmd/probe` for usage.

@@ -133,7 +133,7 @@ func mapGenres(in []mbGenre) []string {
 	for _, g := range in {
 		if g.Name != "" {
 			// Upstream title-cases genres; the raw web-service names are
-			// lowercase (see [format.TitleCase] and AUDIT.md 33).
+			// lowercase (see [format.TitleCase]).
 			out = append(out, format.TitleCase(g.Name))
 		}
 	}
@@ -157,7 +157,7 @@ func mapLinks(in []mbRelation) []skyhook.LinkResource {
 	for _, r := range in {
 		if r.URL != nil && r.URL.Resource != "" {
 			// Upstream types links by domain label, not by MusicBrainz's own
-			// relationship vocabulary (see [format.LinkType] and AUDIT.md 32).
+			// relationship vocabulary (see [format.LinkType]).
 			out = append(out, skyhook.LinkResource{Target: r.URL.Resource, Type: format.LinkType(r.URL.Resource)})
 		}
 	}
@@ -232,8 +232,7 @@ func primaryType(rg *mbReleaseGroup) string {
 		return format.PrimaryTypeOrOther(*rg.PrimaryType)
 	}
 	// An empty Type matches no metadata profile and hides the album; upstream
-	// reports untyped groups as "Other" (see [format.PrimaryTypeOrOther] and
-	// AUDIT.md 31).
+	// reports untyped groups as "Other" (see [format.PrimaryTypeOrOther]).
 	return "Other"
 }
 

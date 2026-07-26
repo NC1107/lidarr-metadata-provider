@@ -249,21 +249,14 @@ jobs:
           set -euo pipefail
           TAG="${{ needs.check.outputs.tag }}"
           NOTES="$(cat <<EOF
-          Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`.
-          Enriched with artist images and biographies from Wikidata and Wikipedia; see \`docs/DATA_SOURCES.md\` for provenance and licensing.
+          Built from the MusicBrainz full export \`${{ steps.export.outputs.stamp }}\`, with artist images, biographies, ratings and cover art folded in (\`docs/DATA_SOURCES.md\` for provenance and licensing).
 
           | | |
           | --- | --- |
           | Size | ${{ steps.artifact.outputs.size }} |
-          | Parts | ${{ steps.artifact.outputs.parts }} |
           | SHA-256 | \`${{ steps.artifact.outputs.sha }}\` |
 
-          The container downloads, rejoins and verifies this automatically.
-          The dataset is published in parts because it exceeds a single release
-          asset; the server reads \`dataset.db.parts\` and fetches the rest.
-
-          Prefer not to depend on these builds? The pipeline that produced
-          this ships in the same image, see \`docs/BUILDING.md\`.
+          The container downloads, rejoins and verifies this on its own, nothing to do here. Split into parts because it exceeds one release asset. Build it yourself: \`docs/BUILDING.md\`.
           EOF
           )"
           # Recreate the release from scratch each publish. Re-uploading over
