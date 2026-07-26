@@ -1,6 +1,6 @@
 # lidarr-metadata-provider
 
-A self-hosted replacement for lidarr's cloud metadata server.
+A self-hosted replacement for lidarr's cloud metadata server, I've used this locally for awhile but once a friend saw my setup he asked me to turn it into a repo since he's been having issues with their metadata server, so I just cleaned it up and will post this publicly in case anyone finds it useful. I adjusted it a bit to release as split github assets as to avoid everyone building on their and machines and having anyone else who uses this put weight on musicbrainz servers since they are donation funded and it's not a fair ask for them to consume the compute and bandwidth.
 
 Lidarr doesn't store artist and album metadata itself, it asks api.lidarr.audio for it.
 So adding an artist, refreshing a library, or importing a folder all depend on someone else's server being up.
@@ -32,7 +32,7 @@ Your api key is in lidarr under Settings > General > Security.
 To go back to the cloud service, run the same thing with `--revert`.
 
 That's the whole install.
-After first boot it works offline, and it keeps working if this repo goes quiet for a year.
+After first boot it works offline, and it keeps working with no external dependencies.
 
 ## How it works
 
@@ -47,18 +47,9 @@ The builds run on github actions twice a week, right after musicbrainz publishes
 There's no hosted public instance and no phone home, on purpose.
 The point is not being a single point of failure, so putting one in the middle would defeat it.
 
-## On me being a single point of failure
+## Difference from using lidarr's offical API:
 
-Yes, i see the irony.
-The whole pitch is not depending on someone else's server, and then the dataset comes from my github releases.
-
-The difference is what happens when it breaks.
-If api.lidarr.audio goes down, your lidarr stops right then, mid import.
-If i get bored and wander off, your container keeps serving the dataset it already has, offline, basically forever.
-You just stop getting new music until you do something about it, which is a slower kind of broken.
-
-And you can build the dataset yourself if you'd rather not use my images.
-The pipeline ships in the same container, it's the same code i run, see [docs/BUILDING.md](docs/BUILDING.md).
+In the scenario that lidarr/musicbrainz/github goes down, you will still be able to use lidarr since the metadata is handled entirely on your machine. You can build the dataset yourself if you'd rather not use my images. The pipeline ships in the same container, it's the same code i run, see [docs/BUILDING.md](docs/BUILDING.md). If you wish to compare how my dataset does against, musicbrainz/lidarr offical there is a `-web` flag described later on which you can visually see and test within a crude ui.
 
 ## New releases, and the gap
 
