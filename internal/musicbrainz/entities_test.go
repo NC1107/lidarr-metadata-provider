@@ -78,7 +78,7 @@ func TestToAlbumUsesRecordingCreditWhenTrackHasNone(t *testing.T) {
 	}
 }
 
-// TestFallbackPrimaryTypeDefaultsToOther guards AUDIT.md 31: an untyped release
+// TestFallbackPrimaryTypeDefaultsToOther guards that an untyped release
 // group must type as "Other", never "", or Lidarr's profile filter hides it.
 func TestFallbackPrimaryTypeDefaultsToOther(t *testing.T) {
 	if got := primaryType(&mbReleaseGroup{}); got != "Other" {
@@ -94,7 +94,7 @@ func TestFallbackPrimaryTypeDefaultsToOther(t *testing.T) {
 	}
 }
 
-// TestFallbackGenresTitleCased guards AUDIT.md 33: fallback genres are rendered
+// TestFallbackGenresTitleCased guards that fallback genres are rendered
 // the way upstream does, not left in the web service's raw lowercase.
 func TestFallbackGenresTitleCased(t *testing.T) {
 	got := mapGenres([]mbGenre{{Name: "j-pop"}, {Name: "r&b"}, {Name: ""}})
@@ -103,7 +103,7 @@ func TestFallbackGenresTitleCased(t *testing.T) {
 	}
 }
 
-// TestFallbackLinkTypeByDomain guards AUDIT.md 32: a link types by its domain
+// TestFallbackLinkTypeByDomain guards that a link types by its domain
 // label, not by MusicBrainz's own relationship vocabulary, and an @handle in
 // the path does not leak into the type.
 func TestFallbackLinkTypeByDomain(t *testing.T) {

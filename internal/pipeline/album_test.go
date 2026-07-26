@@ -248,7 +248,7 @@ func TestBuiltAlbumMatchesTheContract(t *testing.T) {
 	}
 }
 
-// TestBuildAlbumPopulatesAliases guards AUDIT.md 37: album aliases, once always
+// TestBuildAlbumPopulatesAliases guards that album aliases, once always
 // emitted empty, now come from release_group_alias.
 func TestBuildAlbumPopulatesAliases(t *testing.T) {
 	album := buildAlbums(t)[albumGID]

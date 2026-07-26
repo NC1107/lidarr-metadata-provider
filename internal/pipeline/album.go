@@ -189,7 +189,7 @@ func (c *collector) readReleaseLabel(row []mbdump.Field) error {
 
 // readReleaseGroupAlias collects an album's alternate titles. Upstream carries
 // these (a search-hint alias like "Pulp Fiction" for the OST); the field was
-// always emitted empty before (AUDIT.md 37). release_group is read before
+// always emitted empty before. release_group is read before
 // release_group_alias in tar order, so the group already exists here.
 func (c *collector) readReleaseGroupAlias(row []mbdump.Field) error {
 	if err := mbdump.CheckColumns("release_group_alias", row, mbdump.ReleaseGroupAliasColumns); err != nil {
@@ -479,7 +479,7 @@ func (c *collector) release(rel *releaseRow, status string, byMedium map[int][]s
 	sort.Strings(countries)
 
 	// Dedupe by label id, not by name: two distinct label entities can share a
-	// display name and upstream keeps both (AUDIT.md 36), while the same label
+	// display name and upstream keeps both, while the same label
 	// listed twice (e.g. two catalog numbers) collapses to one.
 	labels := make([]string, 0, len(rel.labels))
 	seen := map[int]bool{}

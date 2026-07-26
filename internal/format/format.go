@@ -2,7 +2,7 @@
 // service does. Both the dataset pipeline and the live fallback assemble
 // SkyHook resources, and their responses must be byte-identical; keeping these
 // transforms in one place is what stops the two paths from drifting (the
-// fallback path had silently missed all three of these; see AUDIT.md 31-33).
+// fallback path had silently missed all three of these).
 package format
 
 import (
@@ -68,7 +68,7 @@ func LinkType(url string) string {
 // PrimaryTypeOrOther is a release group's primary type, defaulting an untyped
 // group to "Other". An empty Type intersects no Lidarr metadata profile, which
 // makes the album invisible and unmonitorable; upstream reports untyped groups
-// as "Other" (see AUDIT.md 31).
+// as "Other".
 func PrimaryTypeOrOther(t string) string {
 	if t == "" {
 		return "Other"
