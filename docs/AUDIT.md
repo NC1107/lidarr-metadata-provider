@@ -255,3 +255,18 @@ Priority order:
 37. **Album `Aliases` is never populated** (cosmetic content gap, all albums). Both paths hardcode `[]string{}`; no handler reads `release_group_alias`, though the Pulp Fiction OST fixture carries `"aliases": ["Pulp Fiction"]`. Fix: add a `release_group_alias` handler and wire it into album emit. Effort M.
 
 Suggested handling: ship the current dataset rebuild (it fixes the widespread tiktok `/@handle` link regression and is validated), then take 31-33+36 as one shared-helper change, 37 as a small feature, and 34-35 as investigations that must establish upstream's real order before any code changes.
+
+## Third-pass finding (real-Lidarr soak, 2026-07-25)
+
+**Resolved 2026-07-25 with tests.**
+
+38. **Discography over-inclusion of secondary-credit collaborations detonated a real Lidarr** (functional, both paths, highest real-world impact found so far).
+    Adding ~52 seed artists with `monitor:"all"` grew the soak Lidarr to 3,816 monitored artists and 171 torrents grabbing from live indexers over two days.
+    Cause proven end to end: our pipeline attributed a release group to *every* artist in its MusicBrainz artist-credit (`artist.go:471,505`), so a collaboration appeared in every credited artist's discography, with the album `artistid` set to the lead credit.
+    When Lidarr refreshes such an artist it sees the album's foreign lead, and `RefreshAlbumService` auto-adds that parent artist monitored (`Adding missing parent artist` in the logs), which then fires `AlbumSearch`; the added parent's own collaborations point at further foreign leads, cascading across the collaboration graph (hip-hop features bridging into jazz then classical).
+    The official `api.lidarr.audio` does **not** do this: a clean set-diff showed it lists a release group only under its leading artist (Prince 637 vs our 642, sewerperson 146 vs our 162, Michael Jackson 304 vs 324, Bach 5671 vs 6075 - every extra we served was foreign-lead, and we were missing nothing upstream had beyond a handful of export-vintage lag).
+    So it is our divergence from the contract, not Lidarr behavior alone.
+    Fix: attribute a release group to its lead credit only (`artistIDs[0]`, the same artist `album()` already serves as `artistid`), keeping the full credit list on the album payload's `artists[]`.
+    The live-fallback path had the identical bug (`browseArtistReleases` collected every release group the artist appeared on); it now requests `artist-credits` on the browse and keeps a release group only when the artist leads it (`creditLeadIs`).
+    Guarded by `TestCollaborationBelongsToLeaderOnly` (pipeline) and `TestArtistDiscographyExcludesGuestReleaseGroups` (fallback).
+    Open follow-up: the small under-inclusion seen on Michael Jackson (5) and Bach (9) - release groups upstream has that we do not - is almost certainly the 20260718 export lagging upstream, not a scoping bug; confirm on the next rebuild.

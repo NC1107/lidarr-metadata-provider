@@ -87,6 +87,11 @@ const (
 	liveGID    = "aaaaaaaa-0000-0000-0000-000000000001"
 	noRelGID   = "bbbbbbbb-0000-0000-0000-000000000002"
 	untypedGID = "cccccccc-0000-0000-0000-000000000003"
+	// A second artist who leads a collaboration release group that The La's is
+	// only a secondary credit on, used to prove the collaboration lands in the
+	// leader's discography and not the guest's.
+	leaderGID = "dddddddd-0000-0000-0000-000000000004"
+	collabGID = "eeeeeeee-0000-0000-0000-000000000005"
 )
 
 var coreTables = []string{
@@ -101,12 +106,18 @@ var derivedTables = []string{"artist_meta", "release_group_meta", "tag", "artist
 
 func sampleTables() map[string]string {
 	return map[string]string{
-		"artist": row(mbdump.ArtistColumns, map[int]string{
-			mbdump.ArtistID: "1", mbdump.ArtistGID: artistGID,
-			mbdump.ArtistName: "The La's", mbdump.ArtistSortName: "La's, The",
-			mbdump.ArtistTypeID: "2", mbdump.ArtistComment: "UK band",
-			mbdump.ArtistEnded: "t",
-		}),
+		"artist": strings.Join([]string{
+			row(mbdump.ArtistColumns, map[int]string{
+				mbdump.ArtistID: "1", mbdump.ArtistGID: artistGID,
+				mbdump.ArtistName: "The La's", mbdump.ArtistSortName: "La's, The",
+				mbdump.ArtistTypeID: "2", mbdump.ArtistComment: "UK band",
+				mbdump.ArtistEnded: "t",
+			}),
+			row(mbdump.ArtistColumns, map[int]string{
+				mbdump.ArtistID: "2", mbdump.ArtistGID: leaderGID,
+				mbdump.ArtistName: "Lee Mavers", mbdump.ArtistSortName: "Mavers, Lee",
+			}),
+		}, "\n"),
 		"artist_type": row(mbdump.TypeTableColumns, map[int]string{
 			mbdump.TypeTableID: "2", mbdump.TypeTableName: "Group",
 		}),
@@ -127,9 +138,19 @@ func sampleTables() map[string]string {
 			mbdump.GIDRedirectGID:   "00000000-dead-beef-0000-000000000000",
 			mbdump.GIDRedirectNewID: "1",
 		}),
-		"artist_credit_name": row(mbdump.ArtistCreditNameColumns, map[int]string{
-			mbdump.ArtistCreditNameCredit: "10", mbdump.ArtistCreditNameArtist: "1",
-		}),
+		"artist_credit_name": strings.Join([]string{
+			row(mbdump.ArtistCreditNameColumns, map[int]string{
+				mbdump.ArtistCreditNameCredit: "10", mbdump.ArtistCreditNameArtist: "1",
+				mbdump.ArtistCreditNamePosition: "0"}),
+			// Collaboration credit 11: the leader is position 0, The La's the
+			// secondary credit at position 1.
+			row(mbdump.ArtistCreditNameColumns, map[int]string{
+				mbdump.ArtistCreditNameCredit: "11", mbdump.ArtistCreditNameArtist: "2",
+				mbdump.ArtistCreditNamePosition: "0"}),
+			row(mbdump.ArtistCreditNameColumns, map[int]string{
+				mbdump.ArtistCreditNameCredit: "11", mbdump.ArtistCreditNameArtist: "1",
+				mbdump.ArtistCreditNamePosition: "1"}),
+		}, "\n"),
 		"release": strings.Join([]string{
 			row(mbdump.ReleaseColumns, map[int]string{
 				mbdump.ReleaseID: "100", mbdump.ReleaseGroupRef: "50", mbdump.ReleaseStatusID: "1"}),
@@ -140,6 +161,8 @@ func sampleTables() map[string]string {
 			// A release with no status contributes nothing.
 			row(mbdump.ReleaseColumns, map[int]string{
 				mbdump.ReleaseID: "103", mbdump.ReleaseGroupRef: "52"}),
+			row(mbdump.ReleaseColumns, map[int]string{
+				mbdump.ReleaseID: "104", mbdump.ReleaseGroupRef: "54", mbdump.ReleaseStatusID: "1"}),
 		}, "\n"),
 		"release_status": strings.Join([]string{
 			row(mbdump.TypeTableColumns, map[int]string{
@@ -164,6 +187,11 @@ func sampleTables() map[string]string {
 			row(mbdump.ReleaseGroupColumns, map[int]string{
 				mbdump.ReleaseGroupID: "53", mbdump.ReleaseGroupGID: untypedGID,
 				mbdump.ReleaseGroupName: "Untyped", mbdump.ReleaseGroupArtistCredit: "10"}),
+			// Collaboration led by artist 2, with The La's a secondary credit.
+			row(mbdump.ReleaseGroupColumns, map[int]string{
+				mbdump.ReleaseGroupID: "54", mbdump.ReleaseGroupGID: collabGID,
+				mbdump.ReleaseGroupName: "Collab", mbdump.ReleaseGroupArtistCredit: "11",
+				mbdump.ReleaseGroupTypeID: "1"}),
 		}, "\n"),
 		"release_group_primary_type": row(mbdump.TypeTableColumns, map[int]string{
 			mbdump.TypeTableID: "1", mbdump.TypeTableName: "Album",
@@ -356,6 +384,45 @@ func TestBuildReportsMissingArtist(t *testing.T) {
 	_, err := BuildArtists(core, derived, []string{"99999999-0000-0000-0000-000000000000"})
 	if err == nil || !strings.Contains(err.Error(), "not present") {
 		t.Fatalf("expected a missing-artist error, got %v", err)
+	}
+}
+
+// TestCollaborationBelongsToLeaderOnly is the guard against the metadata that
+// detonated a real Lidarr: a release group must appear only in its leading
+// artist's discography, never in a guest's. When a guest also lists it, Lidarr
+// sees the album's foreign lead, treats it as a missing parent, and auto-adds,
+// monitors, and searches that artist on refresh - which cascades across the
+// whole collaboration graph. Upstream lists a collaboration under its primary
+// artist alone, and this build must match.
+func TestCollaborationBelongsToLeaderOnly(t *testing.T) {
+	core, derived := sampleExport(t)
+	got, err := BuildArtists(core, derived, []string{artistGID, leaderGID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guest, ok := got[artistGID]
+	if !ok {
+		t.Fatal("guest artist missing from build output")
+	}
+	for _, al := range guest.Albums {
+		if al.Title == "Collab" {
+			t.Errorf("collaboration appears in the guest's discography; on refresh Lidarr would auto-add its foreign leader")
+		}
+	}
+
+	leader, ok := got[leaderGID]
+	if !ok {
+		t.Fatal("leader artist missing from build output")
+	}
+	found := false
+	for _, al := range leader.Albums {
+		if al.Title == "Collab" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("collaboration missing from the leader's discography; leader albums = %+v", leader.Albums)
 	}
 }
 
