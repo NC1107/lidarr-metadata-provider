@@ -529,8 +529,8 @@ func (c *collector) track(t stagedTrack, mediumPosition int) skyhook.TrackResour
 	if track.TrackNumber == "" {
 		track.TrackNumber = fmt.Sprint(t.position)
 	}
-	for _, artistID := range c.creditArtists[t.credit] {
-		if a, ok := c.artistsByID[artistID]; ok {
+	for _, m := range c.creditArtists[t.credit] {
+		if a, ok := c.artistsByID[m.artistID]; ok {
 			track.ArtistID = a.gid
 			break
 		}
