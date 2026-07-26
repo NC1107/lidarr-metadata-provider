@@ -218,9 +218,14 @@ type collector struct {
 	artistsByID   map[int]*artistRow
 	artistIDByGID map[string]int
 
-	// creditArtists maps an artist credit to the wanted artists it names, so
-	// a release group can be attributed without holding every credit.
-	creditArtists map[int][]int
+	// creditArtists maps an artist credit to the wanted artists it names, in
+	// MusicBrainz credit position order, so a release group can be attributed
+	// without holding every credit. Position order matters: the first credited
+	// artist is the album's primary artist (its artistid and the discography it
+	// belongs to), and the dump does not deliver credit rows in position order,
+	// so a classical work can otherwise be led by a performer instead of the
+	// composer.
+	creditArtists map[int][]creditMember
 
 	groups map[int]*groupRow
 
@@ -281,7 +286,7 @@ func newCollector(want map[string]bool) *collector {
 		want:           want,
 		artistsByID:    map[int]*artistRow{},
 		artistIDByGID:  map[string]int{},
-		creditArtists:  map[int][]int{},
+		creditArtists:  map[int][]creditMember{},
 		groups:         map[int]*groupRow{},
 		rgStatuses:     map[int]statusMask{},
 		artistTypes:    map[int]string{},
@@ -468,8 +473,42 @@ func (c *collector) readArtistCreditName(row []mbdump.Field) error {
 	if err != nil {
 		return err
 	}
-	c.creditArtists[credit] = append(c.creditArtists[credit], artistID)
+	position, _ := optInt(row[mbdump.ArtistCreditNamePosition])
+	c.addCreditMember(credit, position, artistID)
 	return nil
+}
+
+// creditMember is one artist named in an artist credit, kept with its position
+// so the credit reads back in MusicBrainz order rather than the order rows
+// happened to appear in the dump.
+type creditMember struct {
+	position int
+	artistID int
+}
+
+// addCreditMember inserts a credit member keeping the slice ordered by
+// position. Credits name a handful of artists at most, so the insertion scan is
+// cheap, and skipped non-wanted artists only leave harmless gaps in the
+// positions of those that remain.
+func (c *collector) addCreditMember(credit, position, artistID int) {
+	members := c.creditArtists[credit]
+	i := len(members)
+	for i > 0 && members[i-1].position > position {
+		i--
+	}
+	members = append(members, creditMember{})
+	copy(members[i+1:], members[i:])
+	members[i] = creditMember{position: position, artistID: artistID}
+	c.creditArtists[credit] = members
+}
+
+// creditArtistIDs returns the credit's artist ids in position order.
+func creditArtistIDs(members []creditMember) []int {
+	ids := make([]int, len(members))
+	for i, m := range members {
+		ids[i] = m.artistID
+	}
+	return ids
 }
 
 // readRelease accumulates statuses for every release group, since the wanted
@@ -502,10 +541,11 @@ func (c *collector) readReleaseGroup(row []mbdump.Field) error {
 	if err != nil {
 		return err
 	}
-	artistIDs, ok := c.creditArtists[credit]
+	members, ok := c.creditArtists[credit]
 	if !ok {
 		return nil
 	}
+	artistIDs := creditArtistIDs(members)
 	id, err := atoi(row[mbdump.ReleaseGroupID])
 	if err != nil {
 		return err

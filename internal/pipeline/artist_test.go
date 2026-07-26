@@ -143,13 +143,15 @@ func sampleTables() map[string]string {
 				mbdump.ArtistCreditNameCredit: "10", mbdump.ArtistCreditNameArtist: "1",
 				mbdump.ArtistCreditNamePosition: "0"}),
 			// Collaboration credit 11: the leader is position 0, The La's the
-			// secondary credit at position 1.
-			row(mbdump.ArtistCreditNameColumns, map[int]string{
-				mbdump.ArtistCreditNameCredit: "11", mbdump.ArtistCreditNameArtist: "2",
-				mbdump.ArtistCreditNamePosition: "0"}),
+			// secondary credit at position 1. The rows are deliberately listed
+			// out of position order (the secondary first), the way the dump can,
+			// so the build has to sort by position rather than trust row order.
 			row(mbdump.ArtistCreditNameColumns, map[int]string{
 				mbdump.ArtistCreditNameCredit: "11", mbdump.ArtistCreditNameArtist: "1",
 				mbdump.ArtistCreditNamePosition: "1"}),
+			row(mbdump.ArtistCreditNameColumns, map[int]string{
+				mbdump.ArtistCreditNameCredit: "11", mbdump.ArtistCreditNameArtist: "2",
+				mbdump.ArtistCreditNamePosition: "0"}),
 		}, "\n"),
 		"release": strings.Join([]string{
 			row(mbdump.ReleaseColumns, map[int]string{
@@ -423,6 +425,33 @@ func TestCollaborationBelongsToLeaderOnly(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("collaboration missing from the leader's discography; leader albums = %+v", leader.Albums)
+	}
+}
+
+// TestCreditLeadFollowsPositionNotRowOrder guards artistid correctness: the
+// album's primary artist is the credit's position-0 artist, which the dump does
+// not necessarily deliver first. The leaderGID artist is credited at position 0
+// but its row is listed after the guest's, so a build that trusts row order
+// would hand the album (and its discography) to the guest. This is what put
+// classical works under a performer instead of the composer.
+func TestCreditLeadFollowsPositionNotRowOrder(t *testing.T) {
+	core, derived := sampleExport(t)
+	got, err := BuildArtists(core, derived, []string{artistGID, leaderGID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leader := got[leaderGID]
+	if leader == nil {
+		t.Fatal("leader missing from build output")
+	}
+	found := false
+	for _, al := range leader.Albums {
+		if al.Title == "Collab" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("position-0 artist did not get the collaboration; row order won over position")
 	}
 }
 
