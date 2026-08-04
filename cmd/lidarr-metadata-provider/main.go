@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,6 +43,8 @@ func run() error {
 		datasetPath = flag.String("dataset", "", "path to the dataset file to serve from")
 		datasetURL  = flag.String("dataset-url", envOr("LMP_DATASET_URL", ""),
 			"download the dataset from here when the file is absent, verifying it before use")
+		refresh = flag.Duration("dataset-refresh", envDurOr("LMP_DATASET_REFRESH", 0),
+			"check dataset-url this often and install a newer dataset when one is published; 0 disables (opt in, the download is large)")
 		web      = flag.Bool("web", false, "mount the local dev console at /ui")
 		fallback = flag.Bool("fallback", false,
 			"query MusicBrainz live for lookups the dataset does not have (off by default; requires -contact)")
@@ -57,10 +60,16 @@ func run() error {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
+	// Established before the dataset loads so the background refresh loop shuts
+	// down with the server.
+	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var chain source.Chain
 	var limiter *ratelimit.Limiter
 	compare := map[string]source.Source{}
 	var status server.DatasetStatus
+	var liveStatus func() server.DatasetStatus
 
 	// The dataset goes first so the network is only consulted for what it
 	// does not already have.
@@ -87,16 +96,20 @@ func run() error {
 				"path", *datasetPath, "err", err)
 			return err
 		}
-		defer reader.Close()
 
 		info := reader.Info()
-		chain = append(chain, reader)
-		status = server.DatasetStatus{
-			Present: true, Version: info.BuiltAt, ExportTimestamp: info.ExportStamp,
-			Artists: info.Artists, Albums: info.Albums, Tracks: info.Tracks,
-		}
-		if built, err := time.Parse(time.RFC3339, info.BuiltAt); err == nil {
-			status.InstalledAt = &built
+		status = datasetStatusFrom(info)
+
+		// Updates are opt in: only when an interval is set and there is a url to
+		// check does the dataset get replaced in place while serving.
+		if *refresh > 0 && *datasetURL != "" {
+			live := dataset.NewLive(reader)
+			defer live.Close()
+			chain = append(chain, live)
+			liveStatus = startRefresh(appCtx, live, *datasetURL, *datasetPath, *refresh, log)
+		} else {
+			defer reader.Close()
+			chain = append(chain, reader)
 		}
 		log.Info("dataset loaded", "path", *datasetPath, "export", info.ExportStamp,
 			"artists", info.Artists, "albums", info.Albums, "tracks", info.Tracks)
@@ -147,6 +160,7 @@ func run() error {
 		FallbackNames: fallbackNames(chain),
 		EnableWebUI:   *web,
 		Dataset:       status,
+		LiveDataset:   liveStatus,
 		Compare:       compare,
 		Limiter:       limiter,
 		Logger:        log,
@@ -163,9 +177,6 @@ func run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("listening", "addr", *addr, "sources", strings.Join(chain.Names(), ","))
@@ -180,7 +191,7 @@ func run() error {
 	select {
 	case err := <-errCh:
 		return err
-	case <-ctx.Done():
+	case <-appCtx.Done():
 		log.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -203,6 +214,85 @@ func fallbackNames(chain source.Chain) []string {
 
 // envOr lets the container be configured without rewriting its command,
 // which is how compose files and orchestrators expect to pass settings.
+// datasetStatusFrom builds the console's dataset status from a reader's info.
+func datasetStatusFrom(info dataset.Info) server.DatasetStatus {
+	st := server.DatasetStatus{
+		Present: true, Version: info.BuiltAt, ExportTimestamp: info.ExportStamp,
+		Artists: info.Artists, Albums: info.Albums, Tracks: info.Tracks,
+	}
+	if built, err := time.Parse(time.RFC3339, info.BuiltAt); err == nil {
+		st.InstalledAt = &built
+	}
+	return st
+}
+
+// startRefresh launches the background loop that installs a newer dataset when
+// one is published, swapping it into live without dropping a request. It
+// returns a status function that always reports the dataset currently served,
+// so the console reflects an update without a restart. A failure to establish
+// the baseline digest disables the loop but keeps serving what is loaded.
+func startRefresh(ctx context.Context, live *dataset.Live, url, path string, interval time.Duration, log *slog.Logger) func() server.DatasetStatus {
+	dig, err := dataset.InstalledDigest(path, log)
+	if err != nil {
+		log.Warn("dataset update checks disabled: could not read the installed digest", "err", err)
+		return func() server.DatasetStatus { return datasetStatusFrom(live.Info()) }
+	}
+
+	schedule := "every " + interval.String()
+	var nextCheck atomic.Pointer[time.Time]
+
+	go func() {
+		current := dig
+		for {
+			next := time.Now().Add(interval)
+			nextCheck.Store(&next)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
+			}
+			c, cancel := context.WithTimeout(ctx, 6*time.Hour)
+			newDigest, updated, err := dataset.Refresh(c, url, path, current, log)
+			cancel()
+			if err != nil {
+				log.Warn("dataset update check failed, keeping current dataset", "err", err)
+				continue
+			}
+			if !updated {
+				continue
+			}
+			nr, err := dataset.Open(path)
+			if err != nil {
+				log.Error("installed a new dataset but could not open it, keeping current", "err", err)
+				continue
+			}
+			live.Swap(nr)
+			current = newDigest
+			ni := nr.Info()
+			log.Info("dataset updated", "export", ni.ExportStamp,
+				"artists", ni.Artists, "albums", ni.Albums, "tracks", ni.Tracks)
+		}
+	}()
+
+	return func() server.DatasetStatus {
+		st := datasetStatusFrom(live.Info())
+		st.UpdateSchedule = schedule
+		st.NextCheck = nextCheck.Load()
+		return st
+	}
+}
+
+// envDurOr reads a duration from the environment, falling back when unset or
+// unparseable, so the container can be configured without editing its command.
+func envDurOr(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return fallback
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v

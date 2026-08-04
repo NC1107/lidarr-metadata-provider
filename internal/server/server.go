@@ -43,6 +43,10 @@ type Config struct {
 	// Limiter is exposed to the dev UI so queue state is visible. May be nil.
 	Limiter *ratelimit.Limiter
 	Logger  *slog.Logger
+	// LiveDataset, when set, reports the current dataset on each call, so a
+	// dataset hot-swapped by the refresh loop is reflected without a restart.
+	// When nil the static Dataset is used.
+	LiveDataset func() DatasetStatus
 }
 
 // DatasetStatus describes the local dataset behind the server.

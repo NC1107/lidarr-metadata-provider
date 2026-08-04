@@ -88,10 +88,19 @@ type verdict struct {
 	Size   string `json:"size,omitempty"`
 }
 
+// datasetStatus reports the currently served dataset, live when the refresh
+// loop can replace it, static otherwise.
+func (s *Server) datasetStatus() DatasetStatus {
+	if s.cfg.LiveDataset != nil {
+		return s.cfg.LiveDataset()
+	}
+	return s.cfg.Dataset
+}
+
 func (s *Server) handleUIStatus(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"version":  s.cfg.Version,
-		"dataset":  s.cfg.Dataset,
+		"dataset":  s.datasetStatus(),
 		"metrics":  s.metrics.Snapshot(),
 		"recent":   s.metrics.Recent(),
 		"fallback": s.fallbackStatus(),
