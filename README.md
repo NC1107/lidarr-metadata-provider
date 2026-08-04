@@ -1,7 +1,7 @@
 # lidarr-metadata-provider
 
 A self-hosted replacement for lidarr's cloud metadata server.
-I've run this at home for a while, and after a friend saw my setup and asked for it (his metadata kept giving him trouble) I cleaned it up and put it here in case anyone else finds it useful.
+I've run this at home for a while, and after a friend saw my setup and asked for it so I cleaned it up and put it here in case anyone else finds it useful.
 It ships the dataset as prebuilt github assets on purpose, so nobody has to process the musicbrainz dumps themselves and pile bandwidth onto musicbrainz, which is donation funded.
 
 Lidarr doesn't store artist and album metadata itself, it asks api.lidarr.audio for it.
