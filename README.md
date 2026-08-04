@@ -55,6 +55,19 @@ go run ./cmd/lidarr-metadata-provider -fallback -contact you@example.com -web
 
 Open http://localhost:5001/ui and type a query, it runs against this and the live cloud service at once. Each result also shows how many albums lidarr would actually keep after your metadata profile filters them, which is usually a lot fewer than the raw count.
 
+## Flags
+
+The compose file sets sensible defaults, so most people never touch these. If you run the binary directly or tweak the `command` block:
+
+- `-addr` (default `:5001`) - the address it listens on. Change the port if 5001 is taken.
+- `-dataset` - path to the dataset file it serves. In the container that's `/data/dataset.db`.
+- `-dataset-url` (or the `LMP_DATASET_URL` env var) - where to grab the dataset if the file isn't there yet. Compose points it at the latest github release, so a fresh setup just works.
+- `-web` - turns on the `/ui` side-by-side console. Handy for poking around, not needed for lidarr.
+- `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`.
+- `-contact you@example.com` - an email or url so musicbrainz can reach you if your instance misbehaves. Required when `-fallback` is on. No api key, that's the whole ask.
+- `-fallback-interval` (default ~1s) - minimum gap between musicbrainz requests. Don't drop below a second, that's their limit and going under gets you blocked.
+- `-fallback-max-pages` - caps how far one live lookup will page, so a giant artist can't make a single request hang forever.
+
 ## License
 
 GPL-3.0. The structs in `internal/skyhook` are ported from [lidarr](https://github.com/Lidarr/Lidarr) (GPL-3.0). Metadata comes from [musicbrainz](https://musicbrainz.org) under CC0. `Lidarr/LidarrAPI.Metadata` has no license, so it is read-only behavioural reference and none of its code is reused.
