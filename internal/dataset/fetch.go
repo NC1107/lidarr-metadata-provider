@@ -44,9 +44,17 @@ func Fetch(ctx context.Context, url, dest string, log *slog.Logger) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	_, err := downloadInstall(ctx, url, dest, log)
+	return err
+}
 
+// downloadInstall downloads the dataset at url and installs it at dest,
+// replacing whatever is already there, and records the installed digest in a
+// sidecar so a later refresh can tell whether the published dataset changed
+// without hashing the whole file. It returns that digest.
+func downloadInstall(ctx context.Context, url, dest string, log *slog.Logger) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	// Staged in the destination directory because a rename is only atomic
 	// within one filesystem, and a temp dir may be on another.
@@ -61,7 +69,7 @@ func Fetch(ctx context.Context, url, dest string, log *slog.Logger) error {
 	// single file, which keeps older releases and any other host working.
 	parts, multipart, err := fetchManifest(ctx, url+partsSuffix)
 	if err != nil {
-		return fmt.Errorf("dataset: reading part manifest: %w", err)
+		return "", fmt.Errorf("dataset: reading part manifest: %w", err)
 	}
 
 	var size int64
@@ -73,22 +81,23 @@ func Fetch(ctx context.Context, url, dest string, log *slog.Logger) error {
 	}
 	if err != nil {
 		os.Remove(staged)
-		return fmt.Errorf("dataset: downloading %s: %w", url, err)
+		return "", fmt.Errorf("dataset: downloading %s: %w", url, err)
 	}
 
 	want, err := fetchChecksum(ctx, url)
 	if err != nil {
 		os.Remove(staged)
-		return fmt.Errorf("dataset: fetching checksum: %w", err)
+		return "", fmt.Errorf("dataset: fetching checksum: %w", err)
 	}
 
 	if err := checksum.Install(staged, dest, want); err != nil {
-		return fmt.Errorf("dataset: %w", err)
+		return "", fmt.Errorf("dataset: %w", err)
 	}
+	recordDigest(dest, want, log)
 	log.Info("dataset ready",
 		"size", fmt.Sprintf("%.2f GB", float64(size)/(1<<30)),
 		"took", time.Since(start).Round(time.Second).String())
-	return nil
+	return want, nil
 }
 
 // checksumSuffix names the digest published beside a dataset artifact.

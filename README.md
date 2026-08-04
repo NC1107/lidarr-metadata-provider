@@ -31,13 +31,13 @@ Your api key is in lidarr under Settings > General > Security. Run the same thin
 
 The musicbrainz dumps are about 7gb and slow to process, so that happens ahead of time and what ships is the compact dataset it produces, you never touch the dumps. The server is a single go binary with sqlite opened read only, responses are precomputed json keyed by mbid, and search runs on FTS5.
 
-Updates work like first boot: a new dataset is pulled and verified before it replaces the old one, so a bad download leaves you on the version that already worked. The builds run on github actions twice a week, right after musicbrainz publishes. There's no hosted instance and no phone home, on purpose, so if lidarr, musicbrainz and github all went down your container keeps serving what it has.
+New datasets are built on github actions twice a week, right after musicbrainz publishes. By default your container keeps the one it first downloaded, a stable snapshot that never changes under you. If you want it to stay current, set a refresh interval (`-dataset-refresh`, see Flags) and it checks for a newer dataset on that schedule, verifies it, and swaps it in without dropping a request, leaving you on the version that already worked if a download goes bad. There's no hosted instance and no phone home, on purpose, so if lidarr, musicbrainz and github all went down your container keeps serving what it has.
 
 You can build the dataset yourself if you'd rather not use my images, the pipeline is the same code I run, see [docs/BUILDING.md](docs/BUILDING.md).
 
 ## The gap between dumps
 
-Dumps come out twice a week, so there's a window where a new album is in musicbrainz but not your dataset yet. By default you just wait for the next dataset update. Or turn on the live fallback (uncomment the `command` block in `compose.yaml`, set a contact) and anything the dataset misses gets looked up from musicbrainz directly:
+Dumps come out twice a week, so there's a window where a new album is in musicbrainz but not your dataset yet. Two ways to cover it, and you can use both: keep the dataset current with `-dataset-refresh` (see Flags), or turn on the live fallback (uncomment the `command` block in `compose.yaml`, set a contact) so anything the dataset misses gets looked up from musicbrainz directly:
 
 ```
 -fallback -contact you@example.com
@@ -62,6 +62,7 @@ The compose file sets sensible defaults, so most people never touch these. If yo
 - `-addr` (default `:5001`) - the address it listens on. Change the port if 5001 is taken.
 - `-dataset` - path to the dataset file it serves. In the container that's `/data/dataset.db`.
 - `-dataset-url` (or the `LMP_DATASET_URL` env var) - where to grab the dataset if the file isn't there yet. Compose points it at the latest github release, so a fresh setup just works.
+- `-dataset-refresh` (or `LMP_DATASET_REFRESH`, e.g. `72h`) - off by default. When set, it checks `dataset-url` that often and swaps in a newer dataset when one is published, live, no restart. Opt-in because that's the ~8gb download landing on your schedule. Leave it off and you keep your first snapshot forever, which is fine if you mostly listen to older music.
 - `-web` - turns on the `/ui` side-by-side console. Handy for poking around, not needed for lidarr.
 - `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`.
 - `-contact you@example.com` - an email or url so musicbrainz can reach you if your instance misbehaves. Required when `-fallback` is on. No api key, that's the whole ask.
