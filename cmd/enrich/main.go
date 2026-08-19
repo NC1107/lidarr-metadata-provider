@@ -52,7 +52,20 @@ func run() error {
 	logf("harvesting image and article links from Wikidata...")
 	fresh, err := enrich.Harvest(client, userAgent, logf)
 	if err != nil {
-		return err
+		// Enrichment (images and biographies) is a nice-to-have layered on top
+		// of the dataset; a query service outage must not sink the whole build.
+		// Keep the enrichment we already have and let the pipeline proceed with
+		// it rather than publishing nothing.
+		logf("harvest failed, building with the existing enrichment cache: %v", err)
+		if serr := enrich.Save(*out, cached); serr != nil {
+			return fmt.Errorf("preserving enrichment after a failed harvest: %w", serr)
+		}
+		return nil
+	}
+	// Carry forward any cached artist the harvest did not return, so a slice
+	// that throttled this run does not drop enrichment already gathered.
+	if restored := enrich.CarryMissing(fresh, cached); restored > 0 {
+		logf("carried %d cached artists the harvest did not return", restored)
 	}
 	withImage, withWiki := 0, 0
 	for _, a := range fresh {

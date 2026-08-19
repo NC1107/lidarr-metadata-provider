@@ -52,6 +52,22 @@ func CarryOverviews(fresh, cached map[string]*Artist) int {
 	return carried
 }
 
+// CarryMissing brings forward every cached artist the fresh harvest did not
+// return, so enrichment already gathered is never lost to a Wikidata slice that
+// throttled this run (or an item that briefly dropped its MusicBrainz link).
+// The cache is meant to accrete; a flaky harvest should shrink nothing. It
+// reports how many were carried.
+func CarryMissing(fresh, cached map[string]*Artist) int {
+	carried := 0
+	for mbid, a := range cached {
+		if _, ok := fresh[mbid]; !ok {
+			fresh[mbid] = a
+			carried++
+		}
+	}
+	return carried
+}
+
 // FetchBios fills the Overview of every artist that has a Wikipedia article but
 // no biography yet. Articles are fetched in batches of twenty through the
 // MediaWiki extracts API, spread over a pool of workers, and the lead paragraph
