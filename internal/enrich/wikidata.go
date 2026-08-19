@@ -18,7 +18,16 @@ import (
 // query string like ?width=500 ends up in the filename, breaking display.
 const thumbWidth = 500
 
-const wdqsEndpoint = "https://query.wikidata.org/sparql"
+// wdqsEndpoint is a var, not a const, so tests can point the harvest at a
+// stand-in query service.
+var wdqsEndpoint = "https://query.wikidata.org/sparql"
+
+// Retry tuning for the query service, kept as vars so tests can shrink them.
+var (
+	harvestMaxAttempts = 7
+	harvestBackoffUnit = 15 * time.Second
+	harvestPace        = time.Second
+)
 
 // Harvest pulls, for every Wikidata item that records a MusicBrainz artist id,
 // its image and its English Wikipedia article title.
@@ -32,13 +41,23 @@ const wdqsEndpoint = "https://query.wikidata.org/sparql"
 // for everything carrying property P434 (MusicBrainz artist id) rather than
 // asked about each of our artists in turn, which would be millions of
 // requests. The result is matched back to our artists by MBID.
+// A failed slice is not fatal: the query service throttles shared CI IPs, so
+// one slice can exhaust its retries while the rest succeed. The caller keeps its
+// cached enrichment for the missing slice, so a build refreshes what it can
+// rather than failing outright. Only a total wipeout (every slice failed) is an
+// error, since that means the service is down, not merely throttling.
 func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (map[string]*Artist, error) {
 	out := map[string]*Artist{}
 	const hex = "0123456789abcdef"
+	failed := 0
 	for _, prefix := range hex {
 		rows, err := harvestPrefixRetry(client, userAgent, string(prefix))
 		if err != nil {
-			return nil, fmt.Errorf("harvesting MBIDs starting %q: %w", string(prefix), err)
+			failed++
+			if logf != nil {
+				logf("  wikidata %q: failed after retries, cache covers this slice: %v", string(prefix), err)
+			}
+			continue
 		}
 		for mbid, a := range rows {
 			out[mbid] = a
@@ -47,7 +66,13 @@ func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (
 			logf("  wikidata %q: %d items, %d total", string(prefix), len(rows), len(out))
 		}
 		// The query service is a shared free resource; do not machine-gun it.
-		time.Sleep(time.Second)
+		time.Sleep(harvestPace)
+	}
+	if failed == len(hex) {
+		return nil, fmt.Errorf("every Wikidata slice failed; the query service looks down")
+	}
+	if failed > 0 && logf != nil {
+		logf("wikidata: %d of %d slices failed and will be covered by the cache", failed, len(hex))
 	}
 	return out, nil
 }
@@ -58,9 +83,8 @@ func Harvest(client *http.Client, userAgent string, logf func(string, ...any)) (
 // multi-hour unattended build, the same way the Wikipedia fetch already guards
 // itself.
 func harvestPrefixRetry(client *http.Client, userAgent, prefix string) (map[string]*Artist, error) {
-	const maxAttempts = 7
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; attempt < harvestMaxAttempts; attempt++ {
 		rows, err := harvestPrefix(client, userAgent, prefix)
 		if err == nil {
 			return rows, nil
@@ -70,13 +94,13 @@ func harvestPrefixRetry(client *http.Client, userAgent, prefix string) (map[stri
 		// empty or truncated 200 bodies (which parse as "unexpected end of JSON
 		// input"). A brief hiccup can last a minute or two, so back off well past
 		// it - up to ~90s a try - before giving up on a prefix.
-		backoff := time.Duration(attempt+1) * 15 * time.Second
+		backoff := time.Duration(attempt+1) * harvestBackoffUnit
 		if backoff > 90*time.Second {
 			backoff = 90 * time.Second
 		}
 		time.Sleep(backoff)
 	}
-	return nil, fmt.Errorf("after %d attempts: %w", maxAttempts, lastErr)
+	return nil, fmt.Errorf("after %d attempts: %w", harvestMaxAttempts, lastErr)
 }
 
 // sparqlResults is the shape of a SPARQL JSON result set, narrowed to the
