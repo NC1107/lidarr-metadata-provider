@@ -37,6 +37,10 @@ type RequestLog struct {
 	Status int    `json:"status"`
 	Bytes  int    `json:"bytes"`
 	TookMs int64  `json:"tookMs"`
+	// Count collapses an unbroken run of the same request. Lidarr polls a
+	// few routes on a timer, which would otherwise evict every interesting
+	// entry from the ring before anyone looked at it.
+	Count int `json:"count"`
 }
 
 type routeStats struct {
@@ -61,6 +65,17 @@ const recentMax = 100
 // Log records one served request in the history ring.
 func (m *Metrics) Log(e RequestLog) {
 	m.mu.Lock()
+	if n := len(m.recent); n > 0 {
+		if last := &m.recent[n-1]; last.Path == e.Path && last.Query == e.Query && last.Status == e.Status {
+			last.Count++
+			last.At = e.At
+			last.TookMs = e.TookMs
+			last.Bytes = e.Bytes
+			m.mu.Unlock()
+			return
+		}
+	}
+	e.Count = 1
 	m.recent = append(m.recent, e)
 	if len(m.recent) > recentMax {
 		m.recent = m.recent[len(m.recent)-recentMax:]

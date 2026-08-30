@@ -96,8 +96,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /search/fingerprint", s.handleFingerprint)
 	// Browsers ask for this unprompted. Answering "nothing here" beats a 404
 	// that would otherwise show up in the logs as a failed request.
+	// A tab icon, so the console is identifiable next to its sibling.
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><text y="13" font-size="13">&#127925;</text></svg>`))
 	})
 
 	if s.cfg.EnableWebUI {
