@@ -40,6 +40,7 @@ jobs:
       build: ${{ steps.decide.outputs.build }}
       stamp: ${{ steps.decide.outputs.stamp }}
       tag: ${{ steps.decide.outputs.tag }}
+      date: ${{ steps.decide.outputs.date }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -56,8 +57,12 @@ jobs:
           # already published; the time suffix is dropped so a re-published
           # export does not fork the tag.
           TAG="dataset-${STAMP%%-*}"
+          # The release is titled by that date in ISO form, so the list reads
+          # as dates rather than as export stamps.
+          DATE="${STAMP:0:4}-${STAMP:4:2}-${STAMP:6:2}"
           echo "stamp=$STAMP" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch: building $STAMP"
@@ -268,7 +273,7 @@ jobs:
           gh release delete "$TAG" --yes 2>/dev/null || true
           # part[0-9]* matches the numbered parts only; a bare part* also matches
           # the "parts" manifest, listing it twice and 422ing on the re-add.
-          gh release create "$TAG" --title "Dataset ${{ steps.export.outputs.stamp }}" --notes "$NOTES" \
+          gh release create "$TAG" --title "Dataset ${{ needs.check.outputs.date }}" --notes "$NOTES" \
             release/dataset.db.part[0-9]* release/dataset.db.parts release/dataset.db.sha256
 
       - name: Build log

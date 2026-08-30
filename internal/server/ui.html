@@ -3,672 +3,328 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>lidarr-metadata-provider</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23111114%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%279%27 fill=%27none%27 stroke=%27%23d8964a%27 stroke-width=%272%27/%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%272.5%27 fill=%27%23d8964a%27/%3E%3C/svg%3E">
+<title>lidarr-metadata-provider console</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #f7f8f8;
-    --panel: #ffffff;
-    --sunk: #eef0f1;
-    --line: #dfe3e4;
-    --line-strong: #b9c0c2;
-    --ink: #12191b;
-    --muted: #5f6b6e;
-
-    /* Spring green. Not the blue or violet every tool defaults to, and it
-       leaves red and amber free to mean something. */
-    --accent: #0b7d5d;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(11, 125, 93, 0.10);
-
-    --ok: #0b7d5d;
-    --ok-soft: rgba(11, 125, 93, 0.12);
-    --alert: #b02a37;
-    --alert-soft: rgba(176, 42, 55, 0.10);
-    --warn: #9a6212;
-    --warn-soft: rgba(154, 98, 18, 0.12);
-
-    --fs-display: 30px; --fs-h1: 16px; --fs-h2: 14px;
-    --fs-body: 14px; --fs-small: 12px; --fs-micro: 11px;
-    --r-sm: 5px; --r-md: 8px;
-    --shadow: 0 1px 2px rgba(18, 25, 27, .05), 0 2px 8px rgba(18, 25, 27, .04);
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    --wide: 1400px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c1011;
-      --panel: #151b1c;
-      --sunk: #111617;
-      --line: #253032;
-      --line-strong: #3b4a4d;
-      --ink: #e8eeee;
-      --muted: #8d9b9e;
-
-      --accent: #3ddc97;
-      --accent-ink: #06231a;
-      --accent-soft: rgba(61, 220, 151, 0.13);
-      --ok: #3ddc97;
-      --ok-soft: rgba(61, 220, 151, 0.13);
-      --alert: #ff7b86;
-      --alert-soft: rgba(255, 123, 134, 0.13);
-      --warn: #e0a45e;
-      --warn-soft: rgba(224, 164, 94, 0.13);
-      --shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 2px 10px rgba(0, 0, 0, .3);
-    }
+    --bg: #12141a; --panel: #1a1d26; --line: #2a2e3b; --text: #d8dbe4;
+    --dim: #8a90a3; --accent: #7aa2f7; --good: #9ece6a; --bad: #f7768e;
   }
   * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: var(--fs-body)/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    -webkit-font-smoothing: antialiased;
-  }
-  .wrap { max-width: var(--wide); margin: 0 auto; padding: 0 20px; }
-
-  header { border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 20; }
-  header .wrap { display: flex; align-items: center; gap: 16px; height: 58px; }
-  .brand { display: flex; align-items: center; gap: 9px; flex: none; }
-  .brand h1 { font-size: var(--fs-h1); margin: 0; font-weight: 600; letter-spacing: -0.015em; white-space: nowrap; }
-
-  [role=tablist] { display: flex; gap: 2px; flex: none; }
-  [role=tab] {
-    font: inherit; font-size: var(--fs-body); font-weight: 500; padding: 5px 11px;
-    border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); cursor: pointer;
-  }
-  [role=tab]:hover { color: var(--ink); }
-  [role=tab][aria-selected=true] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-
-  /* Search lives in the header. The filter button sits inside the field so
-     the type, artist and comparison options are one click away without
-     occupying a row of their own. */
-  .searchbar { position: relative; flex: 1; min-width: 220px; max-width: 620px; margin-left: auto; }
-  .searchbar > input {
-    font: inherit; width: 100%; padding: 8px 76px 8px 12px; border-radius: 99px;
-    border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
-  }
-  .searchbar > input:hover { border-color: var(--muted); }
-  .sb-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
-  .icon-btn {
-    display: grid; place-items: center; width: 30px; height: 30px; padding: 0; cursor: pointer;
-    border: 0; border-radius: 99px; background: none; color: var(--muted);
-  }
-  .icon-btn:hover { background: var(--sunk); color: var(--ink); }
-  .icon-btn.on { color: var(--accent); background: var(--accent-soft); }
-  .icon-btn.go { background: var(--accent); color: var(--accent-ink); }
-  .icon-btn.go:hover { filter: brightness(1.08); }
-  .icon-btn[aria-disabled=true] { opacity: .5; cursor: progress; }
-
-  .filters {
-    position: absolute; right: 0; top: calc(100% + 8px); width: 290px; z-index: 30;
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
-    box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 14px; display: grid; gap: 14px;
-  }
-  [hidden] { display: none !important; }
-  .filters select, .filters input[type=text] {
-    font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--r-sm);
-    border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink);
-  }
-  .fgroup { display: grid; gap: 8px; }
-
-  /* Comparison sources read as switches rather than a bare checkbox column. */
-  .srcs { display: grid; gap: 6px; }
-  .src {
-    display: flex; align-items: center; gap: 10px; cursor: pointer;
-    padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
-    background: var(--bg); font-size: var(--fs-body); line-height: 1.2;
-  }
-  .src:hover { border-color: var(--line-strong); }
-  .src input { margin: 0; flex: none; accent-color: var(--accent); }
-  .src span { flex: 1; min-width: 0; }
-  .src:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-  .src.off { opacity: .45; cursor: not-allowed; }
-
-  .status { display: flex; align-items: center; gap: 7px; flex: none; }
-  .dot { width: 8px; height: 8px; border-radius: 99px; background: var(--muted); }
-  .dot.local { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .dot.live { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
-
-  main { padding: 20px 0 64px; }
-  [role=tabpanel][hidden] { display: none; }
-  .lbl { font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
-
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow); }
-
-  .idle { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
-  .idle .panel { padding: 16px; }
-  .idle h2 { margin: 0 0 12px; font-size: var(--fs-h2); font-weight: 600; }
-  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
-  .chip {
-    font: inherit; font-size: var(--fs-small); padding: 5px 11px; cursor: pointer;
-    border: 1px solid var(--line-strong); border-radius: 99px; background: var(--bg); color: var(--ink);
-  }
-  .chip:hover { border-color: var(--accent); color: var(--accent); }
-
-  /* Key/value pairs, used by both the idle panel and the Database tab. This
-     is what broke: the tab emitted markup for classes that no longer existed,
-     so labels and values ran together. */
-  .kv { display: grid; gap: 12px 16px; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
-  .kv > div { display: grid; gap: 2px; min-width: 0; }
-  .kv .v { font-size: var(--fs-body); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-  /* Counts must never wrap. A seven digit number broken across two lines is
-     unreadable, so the type shrinks to fit the column instead. */
-  .kv .v.big {
-    font-size: clamp(18px, 2.1vw, var(--fs-display));
-    font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
-    white-space: nowrap; overflow-wrap: normal;
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, sans-serif; height: 100vh; overflow: hidden; }
+  .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 330px;
+    gap: 12px; padding: 12px; align-items: stretch; height: 100vh; }
+  main { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; min-width: 0;
+    display: flex; flex-direction: column; min-height: 0; }
+  @media (max-width: 1250px) {
+    body { height: auto; overflow: auto; }
+    .layout { grid-template-columns: 1fr; height: auto; }
   }
 
+  .rail { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; position: sticky; top: 12px;
+    max-height: calc(100vh - 24px); display: flex; flex-direction: column; }
+  .railhead { padding: 8px 12px; border-bottom: 1px solid var(--line);
+    font-weight: 600; display: flex; justify-content: space-between;
+    align-items: baseline; }
+  .railhead span { color: var(--dim); font-weight: 400; font-size: 12px; }
+  .railbody { overflow-y: auto; min-height: 0; }
 
-  table.scoreboard { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
-  .scoreboard th, .scoreboard td { padding: 9px 14px; text-align: right; font-size: var(--fs-body); }
-  .scoreboard thead th { background: var(--sunk); border-bottom: 1px solid var(--line); font-size: var(--fs-small); }
-  .scoreboard th[scope=row] { text-align: left; color: var(--muted); font-weight: 500; }
-  .scoreboard thead th:first-child { text-align: left; }
-  .scoreboard td { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .scoreboard tbody tr + tr th, .scoreboard tbody tr + tr td { border-top: 1px solid var(--line); }
-  .delta { font-weight: 600; white-space: nowrap; }
-  .delta.good { color: var(--ok); }
-  .delta.bad { color: var(--alert); }
-  .delta.flat { color: var(--muted); font-weight: 500; }
+  .stat { display: flex; justify-content: space-between; gap: 10px;
+    padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .stat:last-child { border-bottom: 0; }
+  .stat .k { color: var(--dim); white-space: nowrap; }
+  .stat .v { text-align: right; overflow: hidden; text-overflow: ellipsis; }
+  .stathead { padding: 6px 12px 2px; color: var(--dim); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em; }
 
-  .panes { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
-  .pane { overflow: hidden; }
-  .pane > h2 { margin: 0; padding: 13px 16px 10px; font-size: var(--fs-h2); font-weight: 600; display: flex; align-items: center; gap: 8px; }
-  .pane .bar {
-    padding: 8px 16px; background: var(--sunk);
-    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-    font: 500 var(--fs-small)/1 var(--mono); color: var(--muted);
-  }
-  .tag {
-    font-size: var(--fs-micro); font-weight: 600; padding: 3px 7px; border-radius: var(--r-sm);
-    background: var(--sunk); color: var(--muted); white-space: nowrap;
-    display: inline-flex; align-items: center; gap: 4px;
-  }
-  .tag.ok { background: var(--ok-soft); color: var(--ok); }
-  .tag.bad { background: var(--alert-soft); color: var(--alert); }
-  .tag.warn { background: var(--warn-soft); color: var(--warn); }
-  .tag svg { display: block; }
+  .hrow { display: flex; gap: 8px; padding: 6px 12px; font-size: 12px;
+    border-bottom: 1px solid var(--line); font-family: ui-monospace, monospace;
+    align-items: baseline; white-space: nowrap; }
+  .hrow:last-child { border-bottom: 0; }
+  .hrow .t { color: var(--dim); flex: none; }
+  .hrow .p { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .hrow .st { flex: none; }
+  .hrow .st.ok { color: var(--good); } .hrow .st.redir { color: var(--accent); }
+  .hrow .st.err { color: var(--bad); }
+  .hrow .ms { color: var(--dim); flex: none; }
+  .hempty { padding: 18px 14px; color: var(--dim); font-size: 13px; }
 
-  .items { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow: auto; }
-  .items li { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 11px; align-items: flex-start; }
-  .items li:last-child { border-bottom: 0; }
-  .art { width: 38px; height: 38px; border-radius: var(--r-sm); object-fit: cover; background: var(--sunk); flex: none; }
-  .art.none { display: grid; place-items: center; color: var(--muted); font-size: 9px; }
-  .body { min-width: 0; flex: 1; display: grid; gap: 3px; }
-  .row1 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  .row1 strong { font-weight: 600; }
-  .row1 .sub { color: var(--muted); font-size: var(--fs-small); }
-  .row2 { color: var(--muted); font-size: var(--fs-small); display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
-  code.mbid { font: var(--fs-micro)/1 var(--mono); color: var(--muted); }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+  h1 span { color: var(--dim); font-weight: 400; }
+  .sub { color: var(--dim); margin-bottom: 20px; font-size: 13px; }
+  form { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 200px; background: var(--bg);
+    border: 1px solid var(--line); color: var(--text); border-radius: 8px;
+    padding: 10px 14px; font-size: 15px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  input#artist { flex: 0 1 200px; }
+  select, button { background: var(--bg); border: 1px solid var(--line);
+    color: var(--text); border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  button { background: var(--accent); border-color: var(--accent); color: #10131c;
+    font-weight: 600; cursor: pointer; }
+  .qerr { margin: 12px 0 0; color: var(--bad); font-size: 13px; }
 
-  .empty, .error { padding: 16px; color: var(--muted); font-size: var(--fs-body); }
-  .error { color: var(--alert); white-space: pre-wrap; }
-  details { border-top: 1px solid var(--line); }
-  details > summary { padding: 9px 16px; cursor: pointer; font-size: var(--fs-small); color: var(--muted); user-select: none; }
-  details pre { margin: 0; padding: 12px 16px; background: var(--sunk); overflow: auto; max-height: 360px; font: var(--fs-micro)/1.6 var(--mono); }
-  .issues { padding: 11px 16px; border-top: 1px solid var(--line); font-size: var(--fs-small); }
-  .issues ul { margin: 5px 0 0; padding-left: 17px; color: var(--muted); }
+  .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
+    flex: 1; min-height: 0; }
+  @media (max-width: 1600px) { .cols { grid-template-columns: 1fr; } }
+  .col { background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden;
+    display: flex; flex-direction: column; min-height: 0; }
+  .colhead { display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 14px; border-bottom: 1px solid var(--line); flex: none; }
+  .colhead .name { font-weight: 600; }
+  .badge { font-weight: 600; font-size: 12.5px; cursor: help; }
+  .badge.ok { color: var(--good); }
+  .badge.bad { color: var(--bad); }
+  .chips { color: var(--dim); font-size: 12px; }
+  .colbody { overflow-y: auto; min-height: 0; }
 
-  .diff { margin-top: 14px; }
-  .diff h2 { margin: 0; padding: 13px 16px; font-size: var(--fs-h2); font-weight: 600; }
-  .diff table { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
-  .diff th, .diff td { padding: 7px 16px; text-align: left; border-top: 1px solid var(--line); vertical-align: top; }
-  .diff thead th { background: var(--sunk); border-top: 0; color: var(--muted); font-weight: 600; }
-  .diff td.f { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
-  .diff td.v { font-family: var(--mono); overflow-wrap: anywhere; }
+  .row { display: flex; gap: 12px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); align-items: center; }
+  .row:last-child { border-bottom: 0; }
+  .row img, .row .noimg { width: 44px; height: 44px; object-fit: cover;
+    border-radius: 4px; background: var(--line); flex: none; }
+  .row .body { min-width: 0; flex: 1; }
+  .row .t { font-weight: 550; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .row .s { color: var(--dim); font-size: 12.5px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .row .r { margin-left: auto; color: var(--dim); font-size: 12px;
+    text-align: right; flex: none; }
+  .row .r .shown { color: var(--good); }
+  .row .r .shown.zero { color: var(--bad); }
+  .row.mismatch { border-left: 3px solid var(--bad); padding-left: 11px; }
+  .row.match { border-left: 3px solid transparent; padding-left: 11px; }
+  .mbid { font-family: ui-monospace, monospace; font-size: 11px; }
 
-  .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
-  .card { padding: 16px; }
-  .card h2 { margin: 0 0 12px; font-size: var(--fs-h2); font-weight: 600; }
-  .banner {
-    padding: 12px 16px; border-radius: var(--r-md); border: 1px solid var(--line);
-    border-left: 3px solid var(--warn); background: var(--panel); box-shadow: var(--shadow);
-    font-size: var(--fs-body); margin-bottom: 16px;
-  }
-  .hist { width: 100%; border-collapse: collapse; font-size: var(--fs-small); }
-  .hist th, .hist td { padding: 7px 16px; text-align: left; border-top: 1px solid var(--line); white-space: nowrap; }
-  .hist thead th { background: var(--sunk); border-top: 0; color: var(--muted); font-weight: 600; position: sticky; top: 58px; }
-  .hist .q { white-space: normal; overflow-wrap: anywhere; color: var(--ink); }
-  .mono { font-family: var(--mono); }
-  .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .items:focus-visible, details pre:focus-visible { outline-offset: -2px; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
-  @media (max-width: 860px) {
-    header .wrap { height: auto; padding-top: 10px; padding-bottom: 10px; flex-wrap: wrap; }
-    .searchbar { order: 3; width: 100%; max-width: none; margin-left: 0; }
-  }
+  .empty { padding: 22px 14px; color: var(--dim); }
+  .err { padding: 14px; color: var(--bad); font-size: 13px; word-break: break-all; }
+  .foot { margin-top: 12px; color: var(--dim); font-size: 12px; flex: none; }
+  .foot a { color: var(--accent); text-decoration: none; }
 </style>
 </head>
 <body>
-<header>
-  <div class="wrap">
-    <div class="brand">
-      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none">
-        <circle cx="9" cy="12" r="6.2" stroke="var(--accent)" stroke-width="1.8"/>
-        <circle cx="15" cy="12" r="6.2" stroke="var(--muted)" stroke-width="1.8"/>
-      </svg>
-      <h1>Lidarr-Metadata-Provider</h1>
-    </div>
+<div class="layout">
 
-    <div role="tablist" aria-label="Views">
-      <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Search</button>
-      <button role="tab" id="tab-db" aria-controls="panel-db" aria-selected="false">Database</button>
-      <button role="tab" id="tab-live" aria-controls="panel-live" aria-selected="false">Live</button>
-    </div>
+  <aside class="rail">
+    <div class="railhead">statistics</div>
+    <div class="railbody" id="stats"><div class="hempty">loading…</div></div>
+  </aside>
 
-    <form class="searchbar" id="f" role="search">
-      <input type="text" id="query" placeholder="Search artists and albums" autocomplete="off" aria-label="Search">
-      <div class="sb-actions">
-        <button type="button" class="icon-btn" id="filter-btn" aria-expanded="false"
-                aria-controls="filters" aria-label="Filters" title="Filters">
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M1.5 3.5h13M4 8h8M6.5 12.5h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-          </svg>
-        </button>
-        <button type="submit" class="icon-btn go" id="go" aria-label="Search">
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="7" cy="7" r="4.6" stroke="currentColor" stroke-width="1.8"/>
-            <path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="filters" id="filters" hidden>
-        <div class="fgroup">
-          <span class="lbl">Look up</span>
-          <select id="mode">
-            <option value="all">Everything</option>
-            <option value="artist">Artists</option>
-            <option value="album">Albums</option>
-            <option value="artist-id">Artist by ID</option>
-            <option value="album-id">Album by ID</option>
-          </select>
-        </div>
-        <div class="fgroup" id="l-artist" hidden>
-          <span class="lbl">By artist</span>
-          <input type="text" id="artist" placeholder="Narrow to one artist" autocomplete="off">
-        </div>
-        <div class="fgroup">
-          <span class="lbl">Compare against</span>
-          <div class="srcs">
-            <label class="src"><input type="checkbox" id="cmp-official"><span>Lidarr official</span></label>
-            <label class="src"><input type="checkbox" id="cmp-mb"><span>MusicBrainz API</span></label>
-          </div>
-        </div>
-      </div>
+  <main>
+    <h1>lidarr-metadata-provider <span>comparison console</span></h1>
+    <div class="sub">Each query runs against the local server, the official lidarr service, and musicbrainz directly.
+      A red edge marks a result the local server ranks differently or lacks.</div>
+    <form id="f">
+      <input type="text" id="q" placeholder="search artists or albums, or paste an mbid…" autofocus>
+      <input type="text" id="artist" placeholder="artist (optional)" hidden>
+      <select id="mode">
+        <option value="all">everything</option>
+        <option value="artist">artists</option>
+        <option value="album">albums</option>
+        <option value="artist-id">artist by id</option>
+        <option value="album-id">album by id</option>
+      </select>
+      <button>compare</button>
     </form>
-
-    <div class="status" title="Where answers come from">
-      <span class="dot" id="status-dot"></span>
-      <span class="sr-only" id="status-text">checking</span>
+    <div class="cols" id="cols">
+      <div class="col" id="local"></div>
+      <div class="col" id="official"></div>
+      <div class="col" id="musicbrainz"></div>
     </div>
-  </div>
-</header>
+    <div class="qerr" id="qerr" hidden></div>
+    <div class="foot">Metadata from <a href="https://musicbrainz.org">musicbrainz</a>, which is donation funded.
+      The official column queries api.lidarr.audio; the musicbrainz column is only live when the server was started with a contact.
+      Album counts show how many lidarr would keep after profile filtering.</div>
+  </main>
 
-<main class="wrap">
-  <section role="tabpanel" id="panel-search" aria-labelledby="tab-search">
-    <div id="out" aria-busy="false"></div>
-  </section>
-  <section role="tabpanel" id="panel-db" aria-labelledby="tab-db" hidden>
-    <div id="db"></div>
-  </section>
-  <section role="tabpanel" id="panel-live" aria-labelledby="tab-live" hidden>
-    <div id="live"></div>
-  </section>
-  <p id="sr-status" role="status" aria-live="polite" class="sr-only"></p>
-</main>
+  <aside class="rail">
+    <div class="railhead">request history <span id="hcount"></span></div>
+    <div class="railbody" id="history"><div class="hempty">no client requests yet</div></div>
+  </aside>
 
+</div>
 <script>
-const $ = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const ms = (v) => v >= 1000 ? (v / 1000).toFixed(2) + " s" : Math.round(v) + " ms";
-const bytes = (v) => v < 1024 ? v + " B" : v < 1048576 ? (v / 1024).toFixed(1) + " KB" : (v / 1048576).toFixed(2) + " MB";
-const num = (v) => (v ?? 0).toLocaleString();
-const CHECK = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 6.4l2.6 2.6L10 3.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const CROSS = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+const $ = id => document.getElementById(id);
 
-const TABS = [["tab-search", "panel-search"], ["tab-db", "panel-db"], ["tab-live", "panel-live"]];
-function selectTab(tab, focus) {
-  for (const [t, p] of TABS) {
-    const on = t === tab;
-    $(t).setAttribute("aria-selected", String(on));
-    $(t).tabIndex = on ? 0 : -1;
-    $(p).hidden = !on;
+const COLS = [
+  ['local', 'local server'],
+  ['official', 'lidarr endpoint'],
+  ['musicbrainz', 'musicbrainz'],
+];
+
+function placeholder(text) {
+  for (const [id, name] of COLS) {
+    $(id).innerHTML = `<div class="colhead"><span class="name">${name}</span></div>
+      <div class="colbody"><div class="empty">${text}</div></div>`;
   }
-  if (focus) $(tab).focus();
-  if (tab === "tab-db") loadDatabase();
-  if (tab === "tab-live") startLive(); else stopLive();
 }
-TABS.forEach(([tab], i) => {
-  $(tab).tabIndex = i === 0 ? 0 : -1;
-  $(tab).addEventListener("click", () => selectTab(tab));
-  $(tab).addEventListener("keydown", (e) => {
-    const step = { ArrowRight: 1, ArrowLeft: -1, Home: -i, End: TABS.length - 1 - i }[e.key];
-    if (step === undefined) return;
-    e.preventDefault();
-    selectTab(TABS[(i + step + TABS.length) % TABS.length][0], true);
-  });
+placeholder('waiting for a query');
+
+// The artist field only means anything when searching albums by name.
+$('mode').addEventListener('change', () => {
+  $('artist').hidden = $('mode').value !== 'album';
 });
 
-/* Filters */
-function toggleFilters(open) {
-  const show = open ?? $("filters").hidden;
-  $("filters").hidden = !show;
-  $("filter-btn").setAttribute("aria-expanded", String(show));
-}
-$("filter-btn").addEventListener("click", () => toggleFilters());
-document.addEventListener("click", (e) => {
-  if (!$("filters").hidden && !e.target.closest(".searchbar")) toggleFilters(false);
-});
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleFilters(false); });
-
-function syncFields() {
-  const mode = $("mode").value;
-  const withArtist = mode === "album";
-  $("l-artist").hidden = !withArtist;
-  if (!withArtist) $("artist").value = "";
-  const byId = mode.endsWith("-id");
-  $("query").placeholder = byId ? "MusicBrainz ID" : "Search artists and albums";
-  markFilters();
-}
-function markFilters() {
-  const active = $("mode").value !== "all" || $("cmp-official").checked || $("cmp-mb").checked;
-  $("filter-btn").classList.toggle("on", active);
-}
-$("mode").addEventListener("change", syncFields);
-for (const id of ["cmp-official", "cmp-mb"]) $(id).addEventListener("change", markFilters);
-syncFields();
-
-let liveLookups = false, lastStatus = null;
-async function refreshStatus() {
-  try {
-    const s = await (await fetch("/ui/status")).json();
-    lastStatus = s;
-    liveLookups = !!(s.fallback && s.fallback.enabled);
-    const local = s.dataset && s.dataset.present;
-    const redundant = !local && liveLookups;
-    $("cmp-mb").disabled = redundant;
-    $("cmp-mb").closest(".src").title = redundant
-      ? "This server has no database yet, so it is already answering from MusicBrainz"
-      : "Compare against MusicBrainz directly";
-    $("cmp-mb").closest(".src").classList.toggle("off", redundant);
-    if (redundant) $("cmp-mb").checked = false;
-    $("status-dot").className = "dot " + (local ? "local" : liveLookups ? "live" : "");
-    $("status-text").textContent = local ? "Serving from local database"
-      : liveLookups ? "No local database, using live lookups" : "No source";
-    $(".status") && 0;
-    document.querySelector(".status").title = $("status-text").textContent;
-  } catch (e) {
-    $("status-dot").className = "dot";
-    document.querySelector(".status").title = "Server unreachable";
-  }
-}
-
-/* ---- results ---- */
-function formatBadge(r) {
-  if (r.error) return `<span class="tag bad">${CROSS} Error</span>`;
-  return r.formatOk
-    ? `<span class="tag ok">${CHECK} Lidarr compatible</span>`
-    : `<span class="tag bad">${CROSS} ${r.formatIssues.length} field${r.formatIssues.length === 1 ? "" : "s"} off</span>`;
-}
-
-function renderItems(items) {
-  if (!items || !items.length) return `<p class="empty">No results</p>`;
-  return `<ul class="items" tabindex="0">` + items.map((it) => {
-    const art = it.image
-      ? `<img class="art" src="${esc(it.image)}" alt="" loading="lazy">`
-      : `<span class="art none">none</span>`;
-    let shown = "";
-    if (it.kind === "artist" && it.hasAlbums) {
-      const zero = it.visible === 0;
-      shown = `<span class="tag ${zero ? "bad" : "ok"}" aria-describedby="profile-help">${it.visible}/${it.albums} shown${zero ? ", none import" : ""}</span>`;
-    }
-    return `<li>${art}<div class="body">
-      <div class="row1"><strong>${esc(it.title) || "(untitled)"}</strong>
-        ${it.subtitle ? `<span class="sub">${esc(it.subtitle)}</span>` : ""}
-        ${it.type ? `<span class="tag">${esc(it.type)}</span>` : ""}</div>
-      <div class="row2"><code class="mbid">${esc(it.id)}</code>
-        ${shown}${it.detail ? `<span>${esc(it.detail)}</span>` : ""}
-        ${it.severe ? `<span class="tag bad">no release status</span>` : ""}</div>
-    </div></li>`;
-  }).join("") + `</ul>`;
-}
-
-function renderPane(r) {
-  return `<section class="panel pane">
-    <h2>${esc(r.label)} ${formatBadge(r)}</h2>
-    <div class="bar"><span>${r.count} result${r.count === 1 ? "" : "s"}</span>
-      <span>${ms(r.tookMs)}</span><span>${bytes(r.bytes)}</span></div>
-    ${r.error ? `<p class="error">${esc(r.error)}</p>` : renderItems(r.items)}
-    ${(!r.error && !r.formatOk) ? `<div class="issues">Fields Lidarr may not read:
-      <ul>${r.formatIssues.map((d) => `<li>${esc(d)}</li>`).join("")}</ul></div>` : ""}
-    <details><summary>Raw response</summary><pre tabindex="0">${esc(JSON.stringify(r.raw, null, 2))}</pre></details>
-  </section>`;
-}
-
-function scoreboard(sides, verdict) {
-  const row = (label, pick, fmt) => `<tr><th scope="row">${label}</th>` +
-    sides.map(([, r]) => `<td>${fmt(pick(r))}</td>`).join("") + `</tr>`;
-
-  // A compact match cell per compared source: a check when the top result
-  // agrees, a cross when it does not, with the detail on hover rather than
-  // spelled out in a banner.
-  let match = "";
-  if (verdict) {
-    const local = sides[0][1];
-    const cells = sides.map(([kind, r], i) => {
-      if (i === 0) return `<td></td>`;
-      const agree = r.raw && local.raw && topId(r.raw) === topId(local.raw);
-      const title = agree ? "Same top result" : "Different top result: hover a row below to see the diff";
-      return `<td><span class="tag ${agree ? "ok" : "bad"}" title="${esc(title)}">${agree ? CHECK : CROSS}</span></td>`;
-    });
-    match = `<tr><th scope="row">Match</th>${cells.join("")}</tr>`;
-  }
-
-  return `<table class="scoreboard panel">
-    <thead><tr><th scope="col"></th>${sides.map(([, r]) =>
-      `<th scope="col">${esc(r.label)}</th>`).join("")}</tr></thead>
-    <tbody>
-      ${match}
-      ${row("Time", (r) => r.tookMs, ms)}
-      ${row("Size", (r) => r.bytes, bytes)}
-      ${row("Results", (r) => r.count, (v) => v)}
-    </tbody></table>`;
-}
-
-/* A field-level diff of the top result, which is the one a user would pick.
-   Comparing whole documents would drown the real differences in noise. */
-function flatten(v, prefix, out) {
-  if (v === null || typeof v !== "object") { out[prefix] = v; return out; }
-  if (Array.isArray(v)) { out[prefix] = `[${v.length}]`; return out; }
-  for (const k of Object.keys(v)) flatten(v[k], prefix ? prefix + "." + k : k, out);
-  return out;
-}
-function topId(raw) {
-  const t = topOf(raw);
-  return t && t.id;
-}
-function topOf(raw) {
-  const d = raw;
-  if (Array.isArray(d)) return d[0] && (d[0].artist || d[0].album || d[0]);
-  return d;
-}
-function renderDiff(sides) {
-  const tops = sides.map(([, r]) => topOf(r.raw)).filter(Boolean);
-  if (tops.length < 2) return "";
-  const flat = tops.map((t) => flatten(t, "", {}));
-  const keys = [...new Set(flat.flatMap((f) => Object.keys(f)))].sort();
-  const rows = keys.filter((k) => new Set(flat.map((f) => JSON.stringify(f[k]))).size > 1);
-  if (!rows.length) return `<section class="panel diff"><h2>Top result matches on every field</h2></section>`;
-  return `<section class="panel diff">
-    <h2>Top result differs on ${rows.length} field${rows.length === 1 ? "" : "s"}</h2>
-    <table><thead><tr><th>Field</th>${sides.map(([, r]) =>
-      `<th>${esc(r.label)}</th>`).join("")}</tr></thead>
-    <tbody>${rows.slice(0, 40).map((k) => `<tr><td class="f">${esc(k)}</td>` +
-      flat.map((f) => `<td class="v">${esc(f[k] === undefined ? "-" : String(f[k]).slice(0, 90))}</td>`).join("") +
-      `</tr>`).join("")}</tbody></table></section>`;
-}
-
-const EXAMPLES = ["radiohead", "the beatles", "bjork", "aphex twin"];
-function renderIdle() {
-  const ds = (lastStatus && lastStatus.dataset) || {};
-  const counts = ds.present
-    ? `<div class="kv">
-         <div><span class="lbl">Artists</span><span class="v big">${num(ds.artists)}</span></div>
-         <div><span class="lbl">Albums</span><span class="v big">${num(ds.albums)}</span></div>
-       </div>`
-    : `<p class="empty" style="padding:0">No local database. Answers come from live MusicBrainz lookups.</p>`;
-  $("out").innerHTML = `<div class="idle">
-    <section class="panel"><h2>Database</h2>${counts}</section>
-    <section class="panel"><h2>Try</h2>
-      <div class="chips">${EXAMPLES.map((q) => `<button type="button" class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
-    </section>
-  </div>`;
-  for (const b of $("out").querySelectorAll(".chip")) {
-    b.addEventListener("click", () => { $("query").value = b.dataset.q; $("f").requestSubmit(); });
-  }
-}
-
-let searching = false;
-$("f").addEventListener("submit", async (e) => {
+$('f').addEventListener('submit', async e => {
   e.preventDefault();
-  const q = $("query").value.trim();
-  if (!q || searching) return;
-  toggleFilters(false);
-  selectTab("tab-search");
-  searching = true;
-  $("go").setAttribute("aria-disabled", "true");
-  $("out").setAttribute("aria-busy", "true");
-  $("sr-status").textContent = "Searching";
-  $("out").innerHTML = `<p class="empty">Searching${liveLookups
-    ? ", live lookups are paced to one per second" : ""}</p>`;
-
-  const against = [];
-  if ($("cmp-official").checked) against.push("official");
-  if ($("cmp-mb").checked) against.push("musicbrainz");
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('qerr').hidden = true;
+  placeholder('querying…');
   const params = new URLSearchParams({
-    mode: $("mode").value, query: q, artist: $("artist").value.trim(), against: against.join(","),
+    mode: $('mode').value,
+    query: q,
+    artist: $('artist').value.trim(),
+    against: 'official,musicbrainz',
   });
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
   try {
-    const res = await fetch("/ui/query?" + params, { signal: controller.signal });
-    if (!res.ok) throw new Error("server returned " + res.status);
-    const d = await res.json();
-
-    const sides = [["local", d.local]];
-    if (d.musicbrainz) sides.push(["musicbrainz", d.musicbrainz]);
-    if (d.official) sides.push(["official", d.official]);
-
-    let html = "";
-    if (sides.length > 1) html += scoreboard(sides, d.verdict);
-    html += `<div class="panes">` + sides.map(([, r]) => renderPane(r)).join("") + `</div>`;
-    if (sides.length > 1) html += renderDiff(sides);
-    $("out").innerHTML = html;
-    $("sr-status").textContent = d.verdict ? d.verdict.text : `${d.local.count} results`;
+    const r = await fetch('/ui/query?' + params);
+    if (!r.ok) throw new Error(await r.text());
+    render(await r.json());
   } catch (err) {
-    const msg = err.name === "AbortError" ? "Search timed out." : "Search failed: " + (err.message || err);
-    $("out").innerHTML = `<section class="panel pane"><p class="error">${esc(msg)}</p></section>`;
-    $("sr-status").textContent = msg;
-  } finally {
-    clearTimeout(timer);
-    searching = false;
-    $("go").removeAttribute("aria-disabled");
-    $("out").setAttribute("aria-busy", "false");
-    refreshStatus();
+    $('qerr').hidden = false;
+    $('qerr').textContent = err.message;
   }
 });
 
-/* ---- database ---- */
-function dateText(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso), days = Math.floor((Date.now() - d) / 86400000);
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })
-    + (days > 0 ? ` (${days}d ago)` : " (today)");
-}
-async function loadDatabase() {
-  let s;
-  try { s = await (await fetch("/ui/status")).json(); }
-  catch (e) { $("db").innerHTML = `<p class="error">${esc(e)}</p>`; return; }
-  lastStatus = s;
-
-  const ds = s.dataset || {}, m = s.metrics || {}, fb = s.fallback || {};
-  const pair = (k, v) => `<div><span class="lbl">${k}</span><span class="v">${v}</span></div>`;
-
-  $("db").innerHTML = `<div class="cards">
-    <section class="panel card"><h2>Database</h2><div class="kv">
-      ${pair("Snapshot", esc(ds.exportTimestamp ? dateText(ds.exportTimestamp) : "none"))}
-      ${pair("Installed", esc(ds.installedAt ? dateText(ds.installedAt) : "not installed"))}
-      ${pair("Updates", esc(ds.nextCheck ? dateText(ds.nextCheck) : "manual"))}
-      ${pair("Version", esc(s.version || "-"))}
-    </div></section>
-
-    <section class="panel card"><h2>Contents</h2>${ds.present ? `<div class="kv">
-      ${pair("Artists", `<span class="v big">${num(ds.artists)}</span>`)}
-      ${pair("Albums", `<span class="v big">${num(ds.albums)}</span>`)}
-      ${pair("Tracks", `<span class="v big">${num(ds.tracks)}</span>`)}
-    </div>` : `<p class="empty" style="padding:0">Appears once a database is installed.</p>`}</section>
-
-    <section class="panel card"><h2>Live lookups</h2>${fb.enabled ? `<div class="kv">
-      ${pair("Status", "On")}
-      ${pair("Paced", esc(fb.pacedEvery || "-"))}
-      ${pair("Lookups", num(fb.lookups))}
-      ${pair("Queued", num(fb.queued))}
-    </div>` : `<p class="empty" style="padding:0">Off. Nothing leaves this machine.</p>`}</section>
-
-    <section class="panel card"><h2>Serving</h2><div class="kv">
-      ${pair("Requests", num(m.requests))}
-      ${pair("Errors", num(m.errors))}
-      ${pair("Median", ms(m.medianMs || 0))}
-      ${pair("Slowest 5%", ms(m.p95Ms || 0))}
-    </div></section>
-  </div>`;
+function render(d) {
+  const ids = side => new Set((d[side] && d[side].items || []).map(i => i.id));
+  const localIDs = ids('local');
+  for (const [key, name] of COLS) {
+    const s = d[key];
+    if (!s) {
+      $(key).innerHTML = `<div class="colhead"><span class="name">${name}</span></div>
+        <div class="colbody"><div class="empty">not enabled on this server</div></div>`;
+      continue;
+    }
+    const other = key === 'local' ? ids('official') : localIDs;
+    $(key).innerHTML = column(name, s, other, key !== 'local' && !!(d.local && d.local.error));
+  }
+  lockScroll();
 }
 
-// ---- Live request history ----
-let liveTimer = null;
-function stopLive() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null; } }
-function startLive() {
-  loadLive();
-  stopLive();
-  liveTimer = setInterval(loadLive, 2000);
-}
-// The identifying part of a request: the query for searches, the MBID for
-// path lookups, which otherwise showed nothing.
-function liveDetail(r) {
-  if (r.query) return decodeURIComponent(r.query);
-  const seg = (r.path || "").split("/").filter(Boolean).pop() || "";
-  return seg.includes("-") ? seg : "";
-}
-async function loadLive() {
-  let s;
-  try { s = await (await fetch("/ui/status")).json(); }
-  catch (e) { return; }
-  const rows = s.recent || [];
-  const cls = (st) => st >= 500 ? "bad" : st >= 400 ? "warn" : "ok";
-  $("live").innerHTML = `<section class="panel"><h2 style="padding:14px 16px 0;margin:0">
-      What Lidarr is asking (newest first)</h2>
-    ${rows.length ? `<table class="hist"><thead><tr>
-        <th>Time</th><th>Route</th><th>Query</th><th>Status</th><th>Size</th><th>Took</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>
-        <td class="mono">${esc(r.at)}</td>
-        <td class="mono">${esc(r.route)}</td>
-        <td class="mono q">${esc(liveDetail(r))}</td>
-        <td><span class="tag ${cls(r.status)}">${r.status}</span></td>
-        <td class="mono">${bytes(r.bytes)}</td>
-        <td class="mono">${ms(r.tookMs)}</td></tr>`).join("")}</tbody></table>`
-      : `<p class="empty">No requests yet. They appear here as Lidarr makes them.</p>`}
-  </section>`;
+function column(name, s, otherIDs, otherFailed) {
+  // The badge answers one question: would lidarr's deserializer accept this
+  // response. Hover for why it failed.
+  const issues = s.error ? [s.error] : (s.formatIssues || []);
+  const pass = issues.length === 0;
+  const why = pass ? 'response carries the keys and types the client expects'
+                   : issues.join(', ');
+  let h = `<div class="colhead">
+    <span class="name">${name}
+      <span class="badge ${pass ? 'ok' : 'bad'}" title="${esc(why)}">(${pass ? 'pass' : 'fail'})</span></span>
+    <span class="chips">${s.count} result${s.count === 1 ? '' : 's'} · ${s.tookMs}ms · ${fmtBytes(s.bytes)}</span></div>`;
+  if (s.error) return h + `<div class="colbody"><div class="err">${esc(s.error)}</div></div>`;
+  if (!s.items || !s.items.length) return h + `<div class="colbody"><div class="empty">no results</div></div>`;
+
+  h += `<div class="colbody">`;
+  for (const it of s.items) {
+    const cls = otherFailed ? 'match' : (otherIDs.has(it.id) ? 'match' : 'mismatch');
+    let right = '';
+    if (it.hasAlbums) {
+      right += `<span class="shown ${it.visible === 0 ? 'zero' : ''}">${it.visible}/${it.albums} shown</span><br>`;
+    }
+    if (it.severe) {
+      right += `<span style="color:var(--bad)">${esc(it.severeReason || 'no release status')}</span><br>`;
+    }
+    right += `<span class="mbid">${esc((it.id || '').slice(0, 8))}</span>`;
+    const sub = [it.subtitle, it.type, it.detail].filter(Boolean).join(' · ');
+    h += `<div class="row ${cls}">
+      ${it.image ? `<img loading="lazy" src="${esc(it.image)}" alt="">` : `<div class="noimg"></div>`}
+      <div class="body"><div class="t">${esc(it.title || '(untitled)')}</div>
+        <div class="s">${esc(sub)}</div></div>
+      <div class="r">${right}</div>
+    </div>`;
+  }
+  return h + `</div>`;
 }
 
-document.body.insertAdjacentHTML("beforeend",
-  `<p id="profile-help" class="sr-only">Lidarr's default profile keeps only studio albums with an official release.</p>`);
-refreshStatus().then(renderIdle);
+// Scrolling any column scrolls all three, so the same rank stays side by
+// side. Listeners attach to the current elements; innerHTML replaces them on
+// each render, which drops the old ones with them.
+function lockScroll() {
+  const bodies = COLS.map(([id]) => $(id).querySelector('.colbody')).filter(Boolean);
+  let syncing = false;
+  for (const body of bodies) {
+    body.addEventListener('scroll', () => {
+      if (syncing) return;
+      syncing = true;
+      for (const other of bodies) {
+        if (other !== body) other.scrollTop = body.scrollTop;
+      }
+      requestAnimationFrame(() => { syncing = false; });
+    });
+  }
+}
+
+async function poll() {
+  try {
+    const s = await (await fetch('/ui/status')).json();
+    $('stats').innerHTML = statsHTML(s);
+    const rec = s.recent || [];
+    $('hcount').textContent = rec.length ? `last ${rec.length}` : '';
+    $('history').innerHTML = rec.length ? rec.map(hrow).join('')
+      : `<div class="hempty">no client requests yet</div>`;
+  } catch (e) { /* server briefly away; keep the last view */ }
+}
+
+function statsHTML(s) {
+  const d = s.dataset || {}, m = s.metrics || {}, fb = s.fallback || {};
+  const routes = (m.routes || []).slice().sort((a, b) => b.count - a.count);
+  let h = `<div class="stathead">dataset</div>`;
+  if (d.present) {
+    h += stat('artists', (d.artists || 0).toLocaleString())
+       + stat('albums', (d.albums || 0).toLocaleString())
+       + stat('tracks', (d.tracks || 0).toLocaleString())
+       + stat('export', shortStamp(d.exportTimestamp))
+       + stat('installed', shortStamp(d.installedAt))
+       + (d.updateSchedule ? stat('updates', esc(d.updateSchedule)) : '')
+       + (d.nextCheck ? stat('next check', shortStamp(d.nextCheck)) : '');
+  } else {
+    h += stat('no local dataset', '');
+  }
+  h += `<div class="stathead">traffic</div>`
+     + stat('uptime', fmtDur(m.uptimeSeconds || 0))
+     + stat('requests', (m.requests || 0).toLocaleString())
+     + stat('errors', (m.errors || 0).toLocaleString())
+     + stat('median', (m.medianMs || 0).toFixed(2) + 'ms')
+     + stat('p95', (m.p95Ms || 0).toFixed(2) + 'ms');
+  if (fb.enabled) {
+    h += stat('live lookups', (m.fallbackLookups || 0).toLocaleString());
+  }
+  if (routes.length) {
+    h += `<div class="stathead">by route</div>`;
+    h += routes.map(r => stat(r.route, r.count.toLocaleString())).join('');
+  }
+  return h;
+}
+
+const stat = (k, v) => `<div class="stat"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+
+function hrow(r) {
+  const cls = r.status >= 400 ? 'err' : r.status >= 300 ? 'redir' : 'ok';
+  const path = (r.path || r.route || '') + (r.query ? '?' + r.query : '');
+  return `<div class="hrow"><span class="t">${esc(timeOf(r.at))}</span>
+    <span class="p" title="${esc(path)}">${esc(path)}</span>
+    <span class="st ${cls}">${r.status}</span><span class="ms">${Math.round(r.tookMs)}ms</span></div>`;
+}
+
+const timeOf = at => (at || '').slice(11, 19) || '--:--:--';
+const shortStamp = v => v ? String(v).slice(0, 16).replace('T', ' ') : '-';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtBytes = n => n > 1073741824 ? (n/1073741824).toFixed(1) + 'GB'
+  : n > 1048576 ? (n/1048576).toFixed(1) + 'MB'
+  : n > 1024 ? (n/1024).toFixed(1) + 'KB' : (n || 0) + 'B';
+const fmtDur = s => s > 86400 ? Math.floor(s/86400) + 'd ' + Math.floor(s%86400/3600) + 'h'
+  : s > 3600 ? Math.floor(s/3600) + 'h ' + Math.floor(s%3600/60) + 'm'
+  : s > 60 ? Math.floor(s/60) + 'm ' + Math.floor(s%60) + 's' : Math.floor(s) + 's';
+
+poll();
+setInterval(poll, 2500);
 </script>
-
 </body>
 </html>

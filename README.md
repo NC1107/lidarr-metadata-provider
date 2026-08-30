@@ -47,13 +47,16 @@ No api key, the contact is just so musicbrainz can reach you if your instance mi
 
 ## Comparing it against the official service
 
-There's a crude side-by-side ui if you want to see how the data stacks up:
+There's a side-by-side console if you want to see how the data stacks up:
 
 ```
 go run ./cmd/lidarr-metadata-provider -fallback -contact you@example.com -web
 ```
 
-Open http://localhost:5001/ui and type a query, it runs against this and the live cloud service at once. Each result also shows how many albums lidarr would actually keep after your metadata profile filters them, which is usually a lot fewer than the raw count.
+Open http://localhost:5001/ui and type a query, it runs against this server, the official cloud service and musicbrainz at once and lines the three up side by side.
+Each column says whether its response is shaped the way lidarr expects, how long it took and how big it was, and each result shows how many albums lidarr would actually keep after your metadata profile filters them, which is usually a lot fewer than the raw count.
+The musicbrainz column only fills in when the server was started with `-contact`.
+Dataset counts and live request history sit either side of it.
 
 ## Flags
 
