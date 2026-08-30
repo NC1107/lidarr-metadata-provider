@@ -27,6 +27,25 @@ Then point lidarr at it. `metadataSource` has no field in lidarr's ui, so `switc
 
 Your api key is in lidarr under Settings > General > Security. Run the same thing with `--revert` to go back to the cloud service. After first boot it works offline.
 
+## What it needs
+
+Measured on a running instance, not estimated:
+
+| | |
+|---|---|
+| Disk | 9GB for the dataset, and room for a second copy (~18GB) while an update downloads, since the old one keeps serving until the new one is verified |
+| RAM, idle | ~14MB |
+| RAM, normal searches | ~15MB |
+| RAM, ten concurrent worst-case artist pages | ~22MB |
+
+So 128MB is comfortable and 256MB has room to spare.
+It's a single go binary reading sqlite, there's no database server, no cache layer and no background workers, and the memory stays flat because responses stream off disk rather than being held.
+CPU is idle except while answering.
+
+Building your own dataset is a different story: about 10GB of disk for the dumps, roughly 8GB of scratch beside the output, and a peak working set near 13GB, so give it a 16GB machine.
+That gap is exactly why the prebuilt datasets exist.
+[docs/BUILDING.md](docs/BUILDING.md) has the full numbers.
+
 ## How it works
 
 The musicbrainz dumps are about 7gb and slow to process, so that happens ahead of time and what ships is the compact dataset it produces, you never touch the dumps. The server is a single go binary with sqlite opened read only, responses are precomputed json keyed by mbid, and search runs on FTS5.
