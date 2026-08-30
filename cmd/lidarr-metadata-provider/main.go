@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -45,10 +46,10 @@ func run() error {
 			"download the dataset from here when the file is absent, verifying it before use")
 		refresh = flag.Duration("dataset-refresh", envDurOr("LMP_DATASET_REFRESH", 0),
 			"check dataset-url this often and install a newer dataset when one is published; 0 disables (opt in, the download is large)")
-		web      = flag.Bool("web", false, "mount the local dev console at /ui")
-		fallback = flag.Bool("fallback", false,
+		web      = flag.Bool("web", envBoolOr("LMP_WEB", false), "mount the local dev console at /ui")
+		fallback = flag.Bool("fallback", envBoolOr("LMP_FALLBACK", false),
 			"query MusicBrainz live for lookups the dataset does not have (off by default; requires -contact)")
-		contact = flag.String("contact", "",
+		contact = flag.String("contact", envOr("LMP_CONTACT", ""),
 			"contact URL or email identifying this instance to MusicBrainz, required by -fallback")
 		interval = flag.Duration("fallback-interval", ratelimit.DefaultInterval,
 			"minimum spacing between MusicBrainz requests; below 1s risks a block")
@@ -288,6 +289,17 @@ func envDurOr(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+// envBoolOr reads a flag-style boolean from the environment, so the
+// container can turn features on without editing its command.
+func envBoolOr(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

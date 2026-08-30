@@ -67,7 +67,8 @@ The compose file sets sensible defaults, so most people never touch these. If yo
 - `-dataset-url` (or the `LMP_DATASET_URL` env var) - where to grab the dataset if the file isn't there yet. Compose points it at the latest github release, so a fresh setup just works.
 - `-dataset-refresh` (or `LMP_DATASET_REFRESH`, e.g. `72h`) - off by default. When set, it checks `dataset-url` that often and swaps in a newer dataset when one is published, live, no restart. Opt-in because that's the ~8gb download landing on your schedule. Leave it off and you keep your first snapshot forever, which is fine if you mostly listen to older music.
 - `-web` - turns on the `/ui` side-by-side console. Handy for poking around, not needed for lidarr.
-- `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`.
+- `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`. Also what fills in the musicbrainz column in the console. Settable as `LMP_FALLBACK=true`.
+- `-contact` - a url or email identifying your instance to musicbrainz, which they require of anyone querying them. Settable as `LMP_CONTACT`.
 - `-contact you@example.com` - an email or url so musicbrainz can reach you if your instance misbehaves. Required when `-fallback` is on. No api key, that's the whole ask.
 - `-fallback-interval` (default ~1s) - minimum gap between musicbrainz requests. Don't drop below a second, that's their limit and going under gets you blocked.
 - `-fallback-max-pages` - caps how far one live lookup will page, so a giant artist can't make a single request hang forever.

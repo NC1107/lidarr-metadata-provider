@@ -16,6 +16,13 @@ services:
       # "latest" always resolves to the newest published dataset, so a fresh
       # volume picks up current data without editing this file.
       - LMP_DATASET_URL=https://github.com/NC1107/lidarr-metadata-provider/releases/latest/download/dataset.db
+      # Live MusicBrainz lookups for releases too new to be in the dataset,
+      # and the musicbrainz column in the /ui console. The contact identifies
+      # your instance to MusicBrainz and is required by them, not by us; a
+      # URL works as well as an email.
+      # - LMP_FALLBACK=true
+      # - LMP_CONTACT=https://github.com/NC1107/lidarr-metadata-provider
+      #
       # Uncomment to keep the dataset current on its own. Off by default because
       # each update is the full ~8GB artifact; with it set, the server checks
       # this often and swaps in a newer dataset when one is published (new
