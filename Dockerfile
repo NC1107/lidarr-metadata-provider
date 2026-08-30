@@ -47,7 +47,7 @@ ENV LMP_DATASET=/data/dataset.db
 # Lidarr treats metadata failures as transient and retries, so an unhealthy
 # container that keeps answering is worse than one that reports itself down.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -q -O /dev/null http://127.0.0.1:5001/ || exit 1
+    CMD wget -q -O /dev/null --user-agent=healthcheck http://127.0.0.1:5001/ || exit 1
 
 ENTRYPOINT ["lidarr-metadata-provider"]
 CMD ["-addr", ":5001", "-dataset", "/data/dataset.db"]

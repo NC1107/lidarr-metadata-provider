@@ -55,7 +55,7 @@ go run ./cmd/lidarr-metadata-provider -fallback -contact you@example.com -web
 
 Open http://localhost:5001/ui and type a query, it runs against this server, the official cloud service and musicbrainz at once and lines the three up side by side.
 Each column says whether its response is shaped the way lidarr expects, how long it took and how big it was, and each result shows how many albums lidarr would actually keep after your metadata profile filters them, which is usually a lot fewer than the raw count.
-The musicbrainz column only fills in when the server was started with `-contact`.
+The musicbrainz column only fills in when the server runs with `-fallback -contact`, since that is what builds the musicbrainz client.
 Dataset counts and live request history sit either side of it.
 
 ## Flags

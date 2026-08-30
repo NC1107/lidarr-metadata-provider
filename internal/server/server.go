@@ -115,7 +115,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		route, tracked := routeLabel(r.URL.Path)
-		if !tracked {
+		// The container's own healthcheck identifies itself so its every-30s
+		// poll does not crowd real Lidarr traffic out of the history.
+		if !tracked || r.Header.Get("User-Agent") == healthcheckAgent {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -131,6 +133,9 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		})
 	})
 }
+
+// healthcheckAgent is the User-Agent the container's HEALTHCHECK sends.
+const healthcheckAgent = "healthcheck"
 
 // routeLabel collapses a path to the route it serves, reporting false for
 // anything that is not a metadata route. Per-MBID paths aggregate so the

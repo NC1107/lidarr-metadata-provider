@@ -314,7 +314,8 @@ function hrow(r) {
     <span class="st ${cls}">${r.status}</span><span class="ms">${Math.round(r.tookMs)}ms</span></div>`;
 }
 
-const timeOf = at => (at || '').slice(11, 19) || '--:--:--';
+// The server logs a plain "15:04:05"; tolerate an ISO stamp too.
+const timeOf = at => !at ? '--:--:--' : (at.length > 8 ? at.slice(11, 19) : at);
 const shortStamp = v => v ? String(v).slice(0, 16).replace('T', ' ') : '-';
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
