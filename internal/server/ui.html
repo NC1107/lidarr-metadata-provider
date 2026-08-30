@@ -93,8 +93,10 @@
     text-overflow: ellipsis; white-space: nowrap; }
   .row .r { margin-left: auto; color: var(--dim); font-size: 12px;
     text-align: right; flex: none; }
+  .row .r { max-width: 45%; }
   .row .r .shown { color: var(--good); }
   .row .r .shown.zero { color: var(--bad); }
+  .row .r .severe { color: var(--bad); cursor: help; }
   .row.mismatch { border-left: 3px solid var(--bad); padding-left: 11px; }
   .row.match { border-left: 3px solid transparent; padding-left: 11px; }
   .mbid { font-family: ui-monospace, monospace; font-size: 11px; }
@@ -228,7 +230,7 @@ function column(name, s, otherIDs, otherFailed) {
       right += `<span class="shown ${it.visible === 0 ? 'zero' : ''}">${it.visible}/${it.albums} shown</span><br>`;
     }
     if (it.severe) {
-      right += `<span style="color:var(--bad)">${esc(it.severeReason || 'no release status')}</span><br>`;
+      right += `<span class="severe" title="${esc(it.severeReason || '')}">no release status</span><br>`;
     }
     right += `<span class="mbid">${esc((it.id || '').slice(0, 8))}</span>`;
     const sub = [it.subtitle, it.type, it.detail].filter(Boolean).join(' · ');
