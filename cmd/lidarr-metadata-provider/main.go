@@ -39,47 +39,71 @@ func main() {
 }
 
 func run() error {
+	// Every flag can also be set from the environment, which is how compose
+	// files and orchestrators expect to pass settings. A value that does not
+	// parse is an error rather than a silent fallback to the default: an
+	// operator who wrote LMP_DATASET_REFRESH=3d wants refresh on, and finding
+	// out months later that it never ran is worse than a refused start.
+	env := &envConfig{}
 	var (
-		addr        = flag.String("addr", ":5001", "address to listen on")
-		datasetPath = flag.String("dataset", "", "path to the dataset file to serve from")
-		datasetURL  = flag.String("dataset-url", envOr("LMP_DATASET_URL", ""),
+		addr        = flag.String("addr", env.str("LMP_ADDR", ":5001"), "address to listen on")
+		datasetPath = flag.String("dataset", env.str("LMP_DATASET", ""), "path to the dataset file to serve from")
+		datasetURL  = flag.String("dataset-url", env.str("LMP_DATASET_URL", ""),
 			"download the dataset from here when the file is absent, verifying it before use")
-		refresh = flag.Duration("dataset-refresh", envDurOr("LMP_DATASET_REFRESH", 0),
+		refresh = flag.Duration("dataset-refresh", env.dur("LMP_DATASET_REFRESH", 0),
 			"check dataset-url this often and install a newer dataset when one is published; 0 disables (opt in, the download is large)")
-		web      = flag.Bool("web", envBoolOr("LMP_WEB", false), "mount the local dev console at /ui")
-		fallback = flag.Bool("fallback", envBoolOr("LMP_FALLBACK", false),
+		web      = flag.Bool("web", env.boolean("LMP_WEB", false), "mount the local dev console at /ui")
+		fallback = flag.Bool("fallback", env.boolean("LMP_FALLBACK", false),
 			"query MusicBrainz live for lookups the dataset does not have (off by default; requires -contact)")
-		contact = flag.String("contact", envOr("LMP_CONTACT", ""),
+		contact = flag.String("contact", env.str("LMP_CONTACT", ""),
 			"contact URL or email identifying this instance to MusicBrainz, required by -fallback")
-		interval = flag.Duration("fallback-interval", ratelimit.DefaultInterval,
+		interval = flag.Duration("fallback-interval", env.dur("LMP_FALLBACK_INTERVAL", ratelimit.DefaultInterval),
 			"minimum spacing between MusicBrainz requests; below 1s risks a block")
-		maxPages = flag.Int("fallback-max-pages", musicbrainz.DefaultMaxPages,
+		maxPages = flag.Int("fallback-max-pages", env.integer("LMP_FALLBACK_MAX_PAGES", musicbrainz.DefaultMaxPages),
 			"page cap per MusicBrainz browse, bounding how long one cold lookup can take")
 	)
 	flag.Usage = usage
 	flag.Parse()
+	if err := env.err(); err != nil {
+		return err
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// Established before the dataset loads so the background refresh loop shuts
-	// down with the server.
+	// Established before the dataset loads so both the first download and the
+	// background refresh loop stop with the process. Without this a docker
+	// stop during the initial multi-gigabyte download would be ignored until
+	// the kill timeout.
 	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if *refresh > 0 && *datasetURL == "" {
+		log.Warn("-dataset-refresh is set but there is no -dataset-url to check, so updates are off")
+	}
+	if strings.HasPrefix(strings.ToLower(*datasetURL), "http://") {
+		log.Warn("dataset-url is plain http; the checksum guards against a truncated download, not a tampered one",
+			"url", *datasetURL, "fix", "use an https url")
+	}
 
 	var chain source.Chain
 	var limiter *ratelimit.Limiter
 	compare := map[string]source.Source{}
 	var status server.DatasetStatus
 	var liveStatus func() server.DatasetStatus
+	var health func(context.Context) error
 
 	// The dataset goes first so the network is only consulted for what it
 	// does not already have.
 	if *datasetPath != "" {
 		if *datasetURL != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+			ctx, cancel := context.WithTimeout(appCtx, 6*time.Hour)
 			err := dataset.Fetch(ctx, *datasetURL, *datasetPath, log)
 			cancel()
 			if err != nil {
+				if appCtx.Err() != nil {
+					log.Info("stopped during the dataset download")
+					return nil
+				}
 				log.Error("refusing to start: the dataset could not be downloaded", "err", err)
 				return err
 			}
@@ -101,22 +125,26 @@ func run() error {
 		info := reader.Info()
 		status = datasetStatusFrom(info)
 
+		// The live wrapper is always used, so the health probe and the console
+		// see whatever is currently serving whether or not updates are on.
+		live := dataset.NewLive(reader)
+		defer live.Close()
+		chain = append(chain, live)
+		health = live.Probe
+
 		// Updates are opt in: only when an interval is set and there is a url to
 		// check does the dataset get replaced in place while serving.
 		if *refresh > 0 && *datasetURL != "" {
-			live := dataset.NewLive(reader)
-			defer live.Close()
-			chain = append(chain, live)
 			liveStatus = startRefresh(appCtx, live, *datasetURL, *datasetPath, *refresh, log)
 		} else {
-			defer reader.Close()
-			chain = append(chain, reader)
+			liveStatus = func() server.DatasetStatus { return datasetStatusFrom(live.Info()) }
 		}
 		log.Info("dataset loaded", "path", *datasetPath, "export", info.ExportStamp,
 			"artists", info.Artists, "albums", info.Albums, "tracks", info.Tracks)
 	}
 	datasetLoaded := status.Present
 
+	var fallbackLookups func() int64
 	if *fallback {
 		if strings.TrimSpace(*contact) == "" {
 			log.Error("refusing to start: -fallback needs -contact",
@@ -127,8 +155,9 @@ func run() error {
 		limiter = ratelimit.New(*interval)
 		client := musicbrainz.New(musicbrainz.UserAgent(version, *contact), limiter)
 		client.MaxPages = *maxPages
-		mb := source.FromMusicBrainz(client)
+		mb := source.Count(source.FromMusicBrainz(client))
 		chain = append(chain, mb)
+		fallbackLookups = mb.Calls
 		// Also offered to the console as a comparison source, so an operator
 		// can see the dataset and MusicBrainz side by side.
 		compare["musicbrainz"] = mb
@@ -157,24 +186,28 @@ func run() error {
 	}
 
 	srv := server.New(chain, server.Config{
-		Version:       version,
-		FallbackNames: fallbackNames(chain),
-		EnableWebUI:   *web,
-		Dataset:       status,
-		LiveDataset:   liveStatus,
-		Compare:       compare,
-		Limiter:       limiter,
-		Logger:        log,
+		Version:         version,
+		FallbackNames:   fallbackNames(chain),
+		EnableWebUI:     *web,
+		Dataset:         status,
+		LiveDataset:     liveStatus,
+		Health:          health,
+		FallbackLookups: fallbackLookups,
+		Compare:         compare,
+		Limiter:         limiter,
+		Logger:          log,
 	})
 
 	httpServer := &http.Server{
 		Addr:    *addr,
 		Handler: srv.Handler(),
-		// ReadHeaderTimeout stops a slow-header client; WriteTimeout stops one
-		// that reads the response a byte a minute (payloads are precomputed and
-		// small, so 30s is generous); IdleTimeout reaps parked keep-alives.
+		// ReadHeaderTimeout stops a slow-header client and IdleTimeout reaps
+		// parked keep-alives. WriteTimeout has to cover the worst case rather
+		// than the typical one: a live fallback lookup for a large artist can
+		// spend tens of seconds paced through MusicBrainz, and a big artist
+		// page is several megabytes to a client on a slow link.
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
@@ -213,8 +246,6 @@ func fallbackNames(chain source.Chain) []string {
 	return out
 }
 
-// envOr lets the container be configured without rewriting its command,
-// which is how compose files and orchestrators expect to pass settings.
 // datasetStatusFrom builds the console's dataset status from a reader's info.
 func datasetStatusFrom(info dataset.Info) server.DatasetStatus {
 	st := server.DatasetStatus{
@@ -230,20 +261,22 @@ func datasetStatusFrom(info dataset.Info) server.DatasetStatus {
 // startRefresh launches the background loop that installs a newer dataset when
 // one is published, swapping it into live without dropping a request. It
 // returns a status function that always reports the dataset currently served,
-// so the console reflects an update without a restart. A failure to establish
-// the baseline digest disables the loop but keeps serving what is loaded.
+// so the console reflects an update without a restart.
+//
+// Establishing the baseline digest can mean hashing the whole file once, which
+// on a slow disk takes minutes, so it happens inside the loop rather than
+// before the server starts listening. A failure there disables update checks
+// but keeps serving what is loaded.
 func startRefresh(ctx context.Context, live *dataset.Live, url, path string, interval time.Duration, log *slog.Logger) func() server.DatasetStatus {
-	dig, err := dataset.InstalledDigest(path, log)
-	if err != nil {
-		log.Warn("dataset update checks disabled: could not read the installed digest", "err", err)
-		return func() server.DatasetStatus { return datasetStatusFrom(live.Info()) }
-	}
-
 	schedule := "every " + interval.String()
 	var nextCheck atomic.Pointer[time.Time]
 
 	go func() {
-		current := dig
+		current, err := dataset.InstalledDigest(path, log)
+		if err != nil {
+			log.Warn("dataset update checks disabled: could not read the installed digest", "err", err)
+			return
+		}
 		for {
 			next := time.Now().Add(interval)
 			nextCheck.Store(&next)
@@ -256,12 +289,18 @@ func startRefresh(ctx context.Context, live *dataset.Live, url, path string, int
 			newDigest, updated, err := dataset.Refresh(c, url, path, current, log)
 			cancel()
 			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
 				log.Warn("dataset update check failed, keeping current dataset", "err", err)
 				continue
 			}
 			if !updated {
 				continue
 			}
+			// The download was validated before it was installed, so this open
+			// is expected to succeed; the guard stays because the old reader
+			// keeps its own file handles and remains a safe thing to keep serving.
 			nr, err := dataset.Open(path)
 			if err != nil {
 				log.Error("installed a new dataset but could not open it, keeping current", "err", err)
@@ -283,33 +322,59 @@ func startRefresh(ctx context.Context, live *dataset.Live, url, path string, int
 	}
 }
 
-// envDurOr reads a duration from the environment, falling back when unset or
-// unparseable, so the container can be configured without editing its command.
-func envDurOr(key string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-	}
-	return fallback
+// envConfig reads flag defaults from the environment and collects parse
+// errors, so a misspelt value refuses the start with a message naming the
+// variable instead of silently running with the default.
+type envConfig struct {
+	errs []error
 }
 
-// envBoolOr reads a flag-style boolean from the environment, so the
-// container can turn features on without editing its command.
-func envBoolOr(key string, fallback bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
-	}
-	return fallback
-}
+func (e *envConfig) err() error { return errors.Join(e.errs...) }
 
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+func (e *envConfig) str(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
 	}
 	return fallback
+}
+
+func (e *envConfig) dur(key string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a duration (use forms like 6h, 72h, 30m)", key, v))
+		return fallback
+	}
+	return d
+}
+
+func (e *envConfig) boolean(key string, fallback bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q is not a boolean (use true or false)", key, v))
+		return fallback
+	}
+	return b
+}
+
+func (e *envConfig) integer(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		e.errs = append(e.errs, fmt.Errorf("%s=%q is not an integer", key, v))
+		return fallback
+	}
+	return n
 }
 
 func consoleURL(addr string) string {
@@ -333,6 +398,10 @@ artifact, and is opt-in:
 
 Add -web for a local console at /ui to try searches and compare them with the
 live cloud service without going through Lidarr.
+
+Every flag has an environment variable of the same name prefixed LMP_, in
+upper case with dashes as underscores (LMP_DATASET_URL, LMP_FALLBACK, ...).
+Flags win over the environment.
 
 Flags:
 `)

@@ -1,6 +1,6 @@
 module github.com/nc1107/lidarr-metadata-provider
 
-go 1.25.0
+go 1.26.7
 
 require (
 	github.com/klauspost/compress v1.19.1

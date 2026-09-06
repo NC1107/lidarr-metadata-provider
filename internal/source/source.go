@@ -12,6 +12,7 @@ package source
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/musicbrainz"
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -149,4 +150,39 @@ func translate(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// Counted wraps a Source and counts every lookup that reaches it. Wrapping
+// the network source in a chain is how the server knows how much traffic
+// falls through the dataset, which is the number that says when the dataset
+// has gone stale for what people are asking.
+type Counted struct {
+	Source
+	calls atomic.Int64
+}
+
+// Count wraps s so calls to it are counted.
+func Count(s Source) *Counted { return &Counted{Source: s} }
+
+// Calls is how many lookups reached the wrapped source since start.
+func (c *Counted) Calls() int64 { return c.calls.Load() }
+
+func (c *Counted) Artist(ctx context.Context, mbid string) (*skyhook.ArtistResource, error) {
+	c.calls.Add(1)
+	return c.Source.Artist(ctx, mbid)
+}
+
+func (c *Counted) Album(ctx context.Context, mbid string) (*skyhook.AlbumResource, error) {
+	c.calls.Add(1)
+	return c.Source.Album(ctx, mbid)
+}
+
+func (c *Counted) SearchArtists(ctx context.Context, query string, limit int) ([]skyhook.ArtistResource, error) {
+	c.calls.Add(1)
+	return c.Source.SearchArtists(ctx, query, limit)
+}
+
+func (c *Counted) SearchAlbums(ctx context.Context, query, artist string, limit int) ([]skyhook.AlbumResource, error) {
+	c.calls.Add(1)
+	return c.Source.SearchAlbums(ctx, query, artist, limit)
 }

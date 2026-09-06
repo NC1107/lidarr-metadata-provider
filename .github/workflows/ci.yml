@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch supersedes a run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,6 +33,20 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      # go.mod and go.sum drift silently when a dependency is added without
+      # tidying; a stale file breaks the next contributor's build.
+      - name: Tidy
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "go.mod or go.sum is not tidy: run go mod tidy"; exit 1
+          fi
+
+      - name: Vulnerabilities
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
       # The race detector matters here specifically: the rate limiter is the
       # one piece where a concurrency bug means a MusicBrainz block rather

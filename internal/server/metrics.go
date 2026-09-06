@@ -19,7 +19,10 @@ type Metrics struct {
 
 	requests atomic.Int64
 	errors   atomic.Int64
-	fallback atomic.Int64
+	// fallback reports how many lookups reached a network source. It is
+	// supplied by whoever built the source chain, since the server itself
+	// cannot see which source answered.
+	fallback func() int64
 
 	mu       sync.Mutex
 	byRoute  map[string]*routeStats
@@ -55,8 +58,11 @@ type routeStats struct {
 // limit.
 const recentWindow = 512
 
-func NewMetrics() *Metrics {
-	return &Metrics{started: time.Now(), byRoute: map[string]*routeStats{}}
+func NewMetrics(fallback func() int64) *Metrics {
+	if fallback == nil {
+		fallback = func() int64 { return 0 }
+	}
+	return &Metrics{started: time.Now(), byRoute: map[string]*routeStats{}, fallback: fallback}
 }
 
 // recentMax bounds the request history kept for the console.
@@ -125,9 +131,6 @@ func (m *Metrics) Observe(route string, took time.Duration, failed bool) {
 	}
 }
 
-// ObserveFallback records a lookup that had to leave the machine.
-func (m *Metrics) ObserveFallback() { m.fallback.Add(1) }
-
 // RouteSnapshot is per-route timing, for the status view.
 type RouteSnapshot struct {
 	Route     string  `json:"route"`
@@ -156,7 +159,7 @@ func (m *Metrics) Snapshot() Snapshot {
 		UptimeSeconds:   time.Since(m.started).Seconds(),
 		Requests:        m.requests.Load(),
 		Errors:          m.errors.Load(),
-		FallbackLookups: m.fallback.Load(),
+		FallbackLookups: m.fallback(),
 		Routes:          make([]RouteSnapshot, 0, len(m.byRoute)),
 	}
 
