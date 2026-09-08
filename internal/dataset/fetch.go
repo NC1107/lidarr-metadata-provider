@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/checksum"
@@ -17,8 +18,8 @@ import (
 
 // fetchClient bounds the transfer without a total deadline (the dataset is
 // multi-gigabyte, so a whole-request timeout is wrong): a connection that fails
-// to connect, hand back headers, or stay alive is cut, and a stalled part is
-// retried by downloadParts.
+// to connect, hand back headers, or stay alive is cut. A transfer that stops
+// making progress is cut by downloadInto's stall timer and retried.
 var fetchClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
@@ -90,8 +91,21 @@ func downloadInstall(ctx context.Context, url, dest string, log *slog.Logger) (s
 		return "", fmt.Errorf("dataset: fetching checksum: %w", err)
 	}
 
-	if err := checksum.Install(staged, dest, want); err != nil {
+	// Verify, then prove the file opens and serves, and only then move it into
+	// place. A download that matches its checksum but cannot be read by this
+	// build (a schema this version does not know, most likely) must never
+	// replace a dataset that works.
+	if err := checksum.Verify(staged, want); err != nil {
+		os.Remove(staged)
 		return "", fmt.Errorf("dataset: %w", err)
+	}
+	if err := Validate(staged); err != nil {
+		os.Remove(staged)
+		return "", fmt.Errorf("dataset: downloaded file failed validation, keeping the current dataset: %w", err)
+	}
+	if err := os.Rename(staged, dest); err != nil {
+		os.Remove(staged)
+		return "", fmt.Errorf("dataset: installing %s: %w", filepath.Base(dest), err)
 	}
 	recordDigest(dest, want, log)
 	log.Info("dataset ready",
@@ -169,29 +183,47 @@ func downloadParts(ctx context.Context, url string, parts []string, dest string,
 		if err != nil {
 			return total, err
 		}
-		var n int64
-		for attempt := 0; attempt < 3; attempt++ {
-			if attempt > 0 {
-				if _, err := f.Seek(offset, io.SeekStart); err != nil {
-					return total, err
-				}
-				if err := f.Truncate(offset); err != nil {
-					return total, err
-				}
-				log.Info("retrying dataset part", "name", part, "attempt", attempt+1, "err", err)
-				time.Sleep(time.Duration(attempt) * 3 * time.Second)
-			}
-			n, err = downloadInto(ctx, base+part, f, log)
-			if err == nil {
-				break
-			}
-		}
+		n, err := downloadRetrying(ctx, base+part, f, offset, log)
 		if err != nil {
 			return total, fmt.Errorf("part %s: %w", part, err)
 		}
 		total += n
 	}
 	return total, f.Sync()
+}
+
+// downloadAttempts is how many times one transfer is tried before the whole
+// download is given up. Retries cover a dropped or stalled connection, which
+// over a multi-gigabyte transfer is routine rather than exceptional.
+const downloadAttempts = 3
+
+// downloadRetrying fetches url into f starting at offset, rewinding and
+// truncating back to offset before each retry so a partial attempt is never
+// left in the file. It honours ctx between attempts as well as during them.
+func downloadRetrying(ctx context.Context, url string, f *os.File, offset int64, log *slog.Logger) (int64, error) {
+	var n int64
+	var err error
+	for attempt := 0; attempt < downloadAttempts; attempt++ {
+		if attempt > 0 {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				return 0, err
+			}
+			if err := f.Truncate(offset); err != nil {
+				return 0, err
+			}
+			log.Info("retrying dataset download", "url", url, "attempt", attempt+1, "err", err)
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 3 * time.Second):
+			}
+		}
+		n, err = downloadInto(ctx, url, f, log)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	return n, err
 }
 
 func fetchChecksum(ctx context.Context, url string) (string, error) {
@@ -226,16 +258,25 @@ func download(ctx context.Context, url, dest string, log *slog.Logger) (int64, e
 	}
 	defer f.Close()
 
-	written, err := downloadInto(ctx, url, f, log)
+	written, err := downloadRetrying(ctx, url, f, 0, log)
 	if err != nil {
 		return written, err
 	}
 	return written, f.Sync()
 }
 
+// stallTimeout is how long a transfer may go without delivering a byte before
+// it is cut and retried. Without it a half-open connection holds the download
+// until the outer context expires, hours later.
+const stallTimeout = 2 * time.Minute
+
 // downloadInto streams one url into an already-open writer, so both a whole
-// file and a run of parts share the same transfer and progress logging.
+// file and a run of parts share the same transfer, stall detection and
+// progress logging.
 func downloadInto(ctx context.Context, url string, w io.Writer, log *slog.Logger) (int64, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, err
@@ -249,24 +290,42 @@ func downloadInto(ctx context.Context, url string, w io.Writer, log *slog.Logger
 		return 0, fmt.Errorf("HTTP %s", resp.Status)
 	}
 
+	// The stall timer cancels the request when no read completes in time;
+	// every read that does complete pushes it back.
+	var stalled atomic.Bool
+	stall := time.AfterFunc(stallTimeout, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	defer stall.Stop()
+
 	// A multi-gigabyte download over a slow line looks identical to a hang
 	// without this.
-	return io.Copy(w, &progressReader{
+	n, err := io.Copy(w, &progressReader{
 		r: resp.Body, total: resp.ContentLength, log: log, last: time.Now(),
+		onRead: func() { stall.Reset(stallTimeout) },
 	})
+	if err != nil && stalled.Load() {
+		return n, fmt.Errorf("no data received for %s, transfer stalled: %w", stallTimeout, err)
+	}
+	return n, err
 }
 
 type progressReader struct {
-	r     io.Reader
-	total int64
-	read  int64
-	log   *slog.Logger
-	last  time.Time
+	r      io.Reader
+	total  int64
+	read   int64
+	log    *slog.Logger
+	last   time.Time
+	onRead func()
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
 	n, err := p.r.Read(b)
 	p.read += int64(n)
+	if n > 0 && p.onRead != nil {
+		p.onRead()
+	}
 	if time.Since(p.last) >= 15*time.Second {
 		p.last = time.Now()
 		if p.total > 0 {

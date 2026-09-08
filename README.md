@@ -81,16 +81,19 @@ Dataset counts and live request history sit either side of it.
 
 The compose file sets sensible defaults, so most people never touch these. If you run the binary directly or tweak the `command` block:
 
+Every flag can also be set from the environment as `LMP_` plus the flag name in upper case with dashes as underscores (`LMP_DATASET_URL`, `LMP_FALLBACK`, ...). A flag on the command line wins. A value that doesn't parse (`LMP_DATASET_REFRESH=3d`, say) refuses to start rather than silently running with the default.
+
 - `-addr` (default `:5001`) - the address it listens on. Change the port if 5001 is taken.
 - `-dataset` - path to the dataset file it serves. In the container that's `/data/dataset.db`.
-- `-dataset-url` (or the `LMP_DATASET_URL` env var) - where to grab the dataset if the file isn't there yet. Compose points it at the latest github release, so a fresh setup just works.
-- `-dataset-refresh` (or `LMP_DATASET_REFRESH`, e.g. `72h`) - off by default. When set, it checks `dataset-url` that often and swaps in a newer dataset when one is published, live, no restart. Opt-in because that's the ~8gb download landing on your schedule. Leave it off and you keep your first snapshot forever, which is fine if you mostly listen to older music.
-- `-web` - turns on the `/ui` side-by-side console. Handy for poking around, not needed for lidarr.
-- `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`. Also what fills in the musicbrainz column in the console. Settable as `LMP_FALLBACK=true`.
-- `-contact` - a url or email identifying your instance to musicbrainz, which they require of anyone querying them. Settable as `LMP_CONTACT`.
-- `-contact you@example.com` - an email or url so musicbrainz can reach you if your instance misbehaves. Required when `-fallback` is on. No api key, that's the whole ask.
-- `-fallback-interval` (default ~1s) - minimum gap between musicbrainz requests. Don't drop below a second, that's their limit and going under gets you blocked.
+- `-dataset-url` - where to grab the dataset if the file isn't there yet. Compose points it at the latest github release, so a fresh setup just works. Use https; a plain http url gets a warning, since the checksum only catches a truncated download, not a tampered one.
+- `-dataset-refresh` (e.g. `72h`) - off by default. When set, it checks `dataset-url` that often and swaps in a newer dataset when one is published, live, no restart. Opt-in because that's the ~8gb download landing on your schedule. Leave it off and you keep your first snapshot forever, which is fine if you mostly listen to older music. A downloaded dataset is verified and test-opened before it replaces the one you have, so a bad download leaves you on the one that works. Note that it also replaces a dataset you built yourself if the published one differs, so leave it off for a self-built dataset.
+- `-web` - turns on the `/ui` side-by-side console. Handy for poking around, not needed for lidarr. The console is unauthenticated and can make the server query the cloud service and musicbrainz on a visitor's behalf, so keep it off on a port other people can reach.
+- `-fallback` - when the dataset misses something, look it up live from musicbrainz. Off by default, and it's the only thing that touches the network while serving. Needs `-contact`. Also what fills in the musicbrainz column in the console.
+- `-contact` - an email or url so musicbrainz can reach you if your instance misbehaves, which they require of anyone querying them. Required when `-fallback` is on. No api key, that's the whole ask.
+- `-fallback-interval` (default ~1s) - minimum gap between musicbrainz requests. Don't drop below a second, that's their limit and going under gets you blocked. Lookups are queued at most a minute deep; past that they get a 503 with a Retry-After, which lidarr treats as transient, rather than letting a burst push everyone's wait out indefinitely.
 - `-fallback-max-pages` - caps how far one live lookup will page, so a giant artist can't make a single request hang forever.
+
+`GET /healthz` runs a real lookup against the served dataset and answers 200 or 503, which is what the container's healthcheck and any orchestrator probe should use. `GET /` is lidarr's own info route and always answers while the process is up.
 
 ## License
 

@@ -26,19 +26,12 @@ services:
       # Uncomment to keep the dataset current on its own. Off by default because
       # each update is the full ~8GB artifact; with it set, the server checks
       # this often and swaps in a newer dataset when one is published (new
-      # datasets land twice a week), live, without a restart.
+      # datasets land twice a week), live, without a restart. Needs room for a
+      # second copy of the dataset while the new one downloads.
       # - LMP_DATASET_REFRESH=72h
-    # Uncomment to add live MusicBrainz lookups for releases too new to be in
-    # the dataset. Off by default: it is the only thing here that touches the
-    # network while serving. The contact identifies your instance to
-    # MusicBrainz and is required by them, not by us.
-    #
-    # command: >
-    #   -addr :5001
-    #   -dataset /data/dataset.db
-    #   -dataset-url https://github.com/NC1107/lidarr-metadata-provider/releases/latest/download/dataset.db
-    #   -fallback
-    #   -contact you@example.com
+      #
+      # Every flag has an LMP_ environment variable (LMP_ADDR, LMP_WEB, ...);
+      # see README.md. There is no need to override the command.
 
 volumes:
   lidarr-metadata:

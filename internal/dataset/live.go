@@ -39,6 +39,9 @@ func (l *Live) Swap(next *Reader) {
 // Info reports the currently served dataset.
 func (l *Live) Info() Info { return l.reader().Info() }
 
+// Probe runs a real lookup against the currently served dataset.
+func (l *Live) Probe(ctx context.Context) error { return l.reader().Probe(ctx) }
+
 // Close closes the reader in place. It is for shutdown, not for a swap.
 func (l *Live) Close() error { return l.reader().Close() }
 

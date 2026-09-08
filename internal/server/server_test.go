@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -237,5 +238,67 @@ func TestRouteLabels(t *testing.T) {
 		if tracked != c.tracked || label != c.label {
 			t.Errorf("routeLabel(%q) = %q,%v want %q,%v", c.path, label, tracked, c.label, c.tracked)
 		}
+	}
+}
+
+// An id that is not shaped like an MBID cannot exist anywhere, so it is a
+// 404 here rather than a trip to a network source that would answer 400.
+func TestMalformedMBIDIsNotFound(t *testing.T) {
+	h := testServer(t, sampleSource())
+	for _, path := range []string{"/artist/notauuid", "/album/etc", "/artist/ff3e88b3-7354-4f30-967c"} {
+		if rec := get(t, h, path); rec.Code != http.StatusNotFound {
+			t.Errorf("%s returned %d, want 404", path, rec.Code)
+		}
+	}
+}
+
+// A 404 is a correct answer, not a failure; counting it made a server asked
+// about unknown artists look broken.
+func TestNotFoundIsNotAnError(t *testing.T) {
+	srv := New(sampleSource(), Config{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	h := srv.Handler()
+	get(t, h, "/artist/00000000-0000-0000-0000-000000000000")
+	if snap := srv.metrics.Snapshot(); snap.Requests != 1 || snap.Errors != 0 {
+		t.Errorf("a 404 counted as an error: %+v", snap)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/artist/ff3e88b3-7354-4f30-967c-1a61ebc8c642", nil))
+	if snap := srv.metrics.Snapshot(); snap.Requests != 2 || snap.Errors != 0 {
+		t.Errorf("a 200 counted as an error: %+v", snap)
+	}
+}
+
+// /healthz reports what the configured probe says, so an orchestrator sees
+// "cannot answer" rather than "process exists".
+func TestHealthzReflectsProbe(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ok := New(sampleSource(), Config{Logger: log, Health: func(context.Context) error { return nil }}).Handler()
+	if rec := get(t, ok, "/healthz"); rec.Code != http.StatusOK {
+		t.Errorf("healthy probe returned %d", rec.Code)
+	}
+	bad := New(sampleSource(), Config{Logger: log, Health: func(context.Context) error { return errors.New("disk gone") }}).Handler()
+	if rec := get(t, bad, "/healthz"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("failing probe returned %d, want 503", rec.Code)
+	}
+	none := New(sampleSource(), Config{Logger: log}).Handler()
+	if rec := get(t, none, "/healthz"); rec.Code != http.StatusOK {
+		t.Errorf("no probe returned %d, want 200", rec.Code)
+	}
+}
+
+// The info route reports the dataset's export as the replication date, in
+// the RFC 3339 form the cloud service uses, so Lidarr's status page shows
+// how fresh the data is.
+func TestInfoReportsExportAsReplicationDate(t *testing.T) {
+	srv := New(sampleSource(), Config{
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Dataset: DatasetStatus{Present: true, ExportTimestamp: "20260718-002132"},
+	})
+	rec := get(t, srv.Handler(), "/")
+	var info skyhook.ServerInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.ReplicationDate != "2026-07-18T00:21:32Z" {
+		t.Errorf("replication date = %q", info.ReplicationDate)
 	}
 }

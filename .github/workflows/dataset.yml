@@ -28,6 +28,12 @@ on:
 permissions:
   contents: write
 
+# Two dataset builds at once would race each other on the release; a manual
+# dispatch while the schedule runs waits its turn instead.
+concurrency:
+  group: dataset
+  cancel-in-progress: false
+
 jobs:
   # Polls the export mirror and decides whether a build is warranted. This is
   # the answer to "watch the dump location instead of building on a blind
@@ -95,7 +101,9 @@ jobs:
       # to ~45-50 GB, which fits with real margin; the previous hand-rolled
       # rm -rf list did not.
       - name: Reclaim disk space
-        uses: jlumbroso/free-disk-space@main
+        # Pinned to a commit: this third-party action runs in a job that can
+        # write releases, so a moving branch ref is not acceptable. v1.3.1.
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: false # leaving the Go toolchain in place; setup-go runs next
           large-packages: true
@@ -275,6 +283,11 @@ jobs:
           # the "parts" manifest, listing it twice and 422ing on the re-add.
           gh release create "$TAG" --title "Dataset ${{ needs.check.outputs.date }}" --notes "$NOTES" \
             release/dataset.db.part[0-9]* release/dataset.db.parts release/dataset.db.sha256
+          # The enrichment cache is a rolling helper release, not a dataset.
+          # GitHub's releases/latest alias resolves to the newest non-prerelease,
+          # so it must stay a prerelease or a fresh container could be pointed
+          # at it and fail to download.
+          gh release edit enrich-cache --prerelease 2>/dev/null || true
 
       - name: Build log
         if: always()
