@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	_ "modernc.org/sqlite"
@@ -21,6 +22,7 @@ import (
 // concurrent use.
 type Reader struct {
 	db      *sql.DB
+	path    string
 	info    Info
 	decoder *zstd.Decoder
 }
@@ -45,6 +47,15 @@ var ErrUnsupportedSchema = errors.New("dataset: unsupported schema version")
 // The immutable flag tells SQLite the file cannot change underneath it, which
 // removes locking entirely. That is accurate here: updates are installed by
 // replacing the file, never by writing into a live one.
+//
+// The pool is pinned: every connection it will ever use is opened up front and
+// none is ever closed for being idle. That is what makes a live update safe.
+// An update installs the new file by renaming it over this path, and
+// database/sql opens connections by path, so a pool that closed idle
+// connections and reopened them later would quietly start reading the new
+// file through a Reader built for the old one. With the pool pinned, every
+// connection keeps the inode it opened, and the old Reader keeps serving the
+// old dataset until it is closed.
 func Open(path string) (*Reader, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&immutable=1")
 	if err != nil {
@@ -52,8 +63,16 @@ func Open(path string) (*Reader, error) {
 	}
 	// Cap the connection pool so a burst of concurrent lookups cannot open an
 	// unbounded number of handles to the immutable file.
-	db.SetMaxOpenConns(runtime.NumCPU() * 4)
-	r := &Reader{db: db}
+	n := poolSize()
+	db.SetMaxOpenConns(n)
+	db.SetMaxIdleConns(n)
+	db.SetConnMaxLifetime(0)
+	db.SetConnMaxIdleTime(0)
+	r := &Reader{db: db, path: path}
+	if err := r.prewarm(n); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("dataset: opening %s: %w", path, err)
+	}
 	if r.info, err = r.readInfo(); err != nil {
 		db.Close()
 		return nil, err
@@ -69,6 +88,84 @@ func Open(path string) (*Reader, error) {
 	}
 	return r, nil
 }
+
+// poolSize is how many connections a Reader holds open. Four per CPU keeps
+// a burst of concurrent lookups from queueing on each other; the cap keeps a
+// large machine from holding hundreds of handles it will never use at once.
+func poolSize() int {
+	n := runtime.NumCPU() * 4
+	if n > maxPoolSize {
+		n = maxPoolSize
+	}
+	if n < 2 {
+		n = 2
+	}
+	return n
+}
+
+const maxPoolSize = 32
+
+// prewarm opens every connection the pool may use, so the set of open file
+// handles is fixed at Open time rather than growing under load, which is the
+// property the live update relies on (see Open).
+func (r *Reader) prewarm(n int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conns := make([]*sql.Conn, 0, n)
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	for i := 0; i < n; i++ {
+		c, err := r.db.Conn(ctx)
+		if err != nil {
+			return err
+		}
+		if err := c.PingContext(ctx); err != nil {
+			c.Close()
+			return err
+		}
+		conns = append(conns, c)
+	}
+	return nil
+}
+
+// Validate opens the dataset at path, checks it is readable and of the schema
+// this build serves, and closes it again. It is what an update runs on a
+// downloaded file before installing it, so a file that would refuse to open
+// never replaces one that works.
+func Validate(path string) error {
+	r, err := Open(path)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return r.Probe(context.Background())
+}
+
+// Probe answers whether the dataset can actually serve: it reads one stored
+// artist and decodes it, which exercises the file, the pool and the
+// dictionary together. It is what the health route reports, since a process
+// that is up but cannot answer a lookup is not healthy.
+func (r *Reader) Probe(ctx context.Context) error {
+	var mbid string
+	err := r.db.QueryRowContext(ctx, `SELECT mbid FROM artist LIMIT 1`).Scan(&mbid)
+	if errors.Is(err, sql.ErrNoRows) {
+		// An empty dataset is unusual but readable; nothing to decode.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("dataset: probe: %w", err)
+	}
+	if _, err := r.Artist(ctx, mbid); err != nil {
+		return fmt.Errorf("dataset: probe: %w", err)
+	}
+	return nil
+}
+
+// Path is where the dataset file was opened from.
+func (r *Reader) Path() string { return r.path }
 
 func (r *Reader) readInfo() (Info, error) {
 	rows, err := r.db.Query(`SELECT key, value FROM meta`)
@@ -200,10 +297,18 @@ func (r *Reader) lookup(ctx context.Context, table, aliases, mbid string, into a
 		row := r.db.QueryRowContext(ctx,
 			`SELECT mbid FROM `+aliases+` WHERE old_mbid = ?`, mbid)
 		if err := row.Scan(&current); err != nil {
-			return source.ErrNotFound
+			if errors.Is(err, sql.ErrNoRows) {
+				return source.ErrNotFound
+			}
+			// Anything else is the database failing, not the id being unknown.
+			// Reporting it as not found would tell Lidarr the artist is gone.
+			return err
 		}
 		if blob, err = r.payload(ctx, table, current); err != nil {
-			return source.ErrNotFound
+			if errors.Is(err, sql.ErrNoRows) {
+				return source.ErrNotFound
+			}
+			return err
 		}
 	} else if err != nil {
 		return err

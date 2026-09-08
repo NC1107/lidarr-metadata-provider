@@ -55,7 +55,7 @@ func serveArtifact(t *testing.T, data []byte, parts int) *httptest.Server {
 }
 
 func TestFetchSingleFile(t *testing.T) {
-	data := []byte("a single-file dataset payload")
+	data := datasetBytes(t, "20260718-000000")
 	srv := serveArtifact(t, data, 1)
 	dest := filepath.Join(t.TempDir(), "dataset.db")
 
@@ -71,7 +71,7 @@ func TestFetchSingleFile(t *testing.T) {
 // TestFetchMultipart is the case that matters for a real dataset: too large for
 // one release asset, published in parts, and rejoined byte-for-byte.
 func TestFetchMultipart(t *testing.T) {
-	data := []byte(strings.Repeat("chunky dataset bytes, ", 5000))
+	data := datasetBytes(t, "20260718-000000")
 	srv := serveArtifact(t, data, 4)
 	dest := filepath.Join(t.TempDir(), "dataset.db")
 

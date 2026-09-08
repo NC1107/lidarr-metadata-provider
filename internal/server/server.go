@@ -7,11 +7,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +49,13 @@ type Config struct {
 	// dataset hot-swapped by the refresh loop is reflected without a restart.
 	// When nil the static Dataset is used.
 	LiveDataset func() DatasetStatus
+	// Health, when set, is what /healthz runs: a real lookup against whatever
+	// is serving, so a process that is up but cannot answer reports unhealthy.
+	// When nil, /healthz reports healthy whenever the process answers.
+	Health func(ctx context.Context) error
+	// FallbackLookups reports how many lookups have reached a network source,
+	// for the console. May be nil.
+	FallbackLookups func() int64
 }
 
 // DatasetStatus describes the local dataset behind the server.
@@ -80,7 +89,7 @@ func New(src source.Source, cfg Config) *Server {
 	if cfg.Version == "" {
 		cfg.Version = "0.0.0-dev"
 	}
-	return &Server{src: src, cfg: cfg, log: cfg.Logger, metrics: NewMetrics()}
+	return &Server{src: src, cfg: cfg, log: cfg.Logger, metrics: NewMetrics(cfg.FallbackLookups)}
 }
 
 // Handler builds the route table.
@@ -88,6 +97,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /{$}", s.handleInfo)
+	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /artist/{mbid}", s.handleArtist)
 	mux.HandleFunc("GET /album/{mbid}", s.handleAlbum)
 	mux.HandleFunc("GET /search", s.handleSearch)
@@ -128,7 +138,9 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 		took := time.Since(start)
-		s.metrics.Observe(route, took, rec.status >= 400)
+		// A 404 is a correct answer to a question about something the dataset
+		// does not have; only a 5xx is the server failing.
+		s.metrics.Observe(route, took, rec.status >= 500)
 		s.metrics.Log(RequestLog{
 			At: start.Format("15:04:05"), Route: route, Path: r.URL.Path,
 			Query: r.URL.RawQuery, Status: rec.status, Bytes: rec.bytes,
@@ -160,16 +172,56 @@ func routeLabel(path string) (string, bool) {
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	replication := s.cfg.ReplicationDate
+	if replication == "" {
+		replication = exportTime(s.datasetStatus().ExportTimestamp)
+	}
 	writeJSON(w, http.StatusOK, skyhook.ServerInfo{
 		Version:         s.cfg.Version,
 		Branch:          "main",
 		Commit:          "",
-		ReplicationDate: s.cfg.ReplicationDate,
+		ReplicationDate: replication,
 	})
 }
 
+// exportTime turns a MusicBrainz export stamp such as 20260718-002132 into
+// RFC 3339, which is the form the cloud service reports its replication date
+// in. An unparseable stamp is returned as is rather than dropped.
+func exportTime(stamp string) string {
+	if t, err := time.Parse("20060102-150405", stamp); err == nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return stamp
+}
+
+// handleHealth answers the container healthcheck and any orchestrator probe.
+// It runs a real lookup when one is configured, so "healthy" means "can
+// answer Lidarr", not merely "process exists".
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Health != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := s.cfg.Health(ctx); err != nil {
+			s.log.Error("health probe failed", "err", err)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unhealthy", "error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// mbidPattern is the shape of a MusicBrainz identifier. Anything else cannot
+// exist in the dataset or in MusicBrainz, so it is answered 404 here rather
+// than forwarded to a network source that would reject it with a 400.
+var mbidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func (s *Server) handleArtist(w http.ResponseWriter, r *http.Request) {
-	artist, err := s.src.Artist(r.Context(), r.PathValue("mbid"))
+	mbid := strings.TrimSpace(r.PathValue("mbid"))
+	if !mbidPattern.MatchString(mbid) {
+		s.writeLookupError(w, r, "artist", source.ErrNotFound)
+		return
+	}
+	artist, err := s.src.Artist(r.Context(), mbid)
 	if err != nil {
 		s.writeLookupError(w, r, "artist", err)
 		return
@@ -178,7 +230,12 @@ func (s *Server) handleArtist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAlbum(w http.ResponseWriter, r *http.Request) {
-	album, err := s.src.Album(r.Context(), r.PathValue("mbid"))
+	mbid := strings.TrimSpace(r.PathValue("mbid"))
+	if !mbidPattern.MatchString(mbid) {
+		s.writeLookupError(w, r, "album", source.ErrNotFound)
+		return
+	}
+	album, err := s.src.Album(r.Context(), mbid)
 	if err != nil {
 		s.writeLookupError(w, r, "album", err)
 		return
@@ -305,6 +362,14 @@ func (s *Server) handleFingerprint(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeLookupError(w http.ResponseWriter, r *http.Request, what string, err error) {
 	if errors.Is(err, source.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": what + " not found"})
+		return
+	}
+	if errors.Is(err, ratelimit.ErrOverloaded) {
+		// The queue in front of MusicBrainz is full. Lidarr retries transient
+		// failures, so tell it when rather than failing the lookup outright.
+		s.log.Warn("lookup refused, fallback queue is full", "what", what, "path", r.URL.Path)
+		w.Header().Set("Retry-After", "30")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "too many live lookups queued, try again shortly"})
 		return
 	}
 	s.log.Error("lookup failed", "what", what, "path", r.URL.Path, "err", err)

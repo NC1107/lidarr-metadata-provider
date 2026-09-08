@@ -190,3 +190,30 @@ func TestStatsReportsQueueState(t *testing.T) {
 		t.Errorf("TotalDelay = %v, want %v", s.TotalDelay, want)
 	}
 }
+
+// TestWaitRefusesBeyondMaxWait is the bound on what a burst can do: once the
+// queue reaches MaxWait, callers are refused rather than pushing the next
+// slot further out for everyone, and refusals reserve nothing.
+func TestWaitRefusesBeyondMaxWait(t *testing.T) {
+	l := New(time.Second)
+	l.MaxWait = 3 * time.Second
+	frozen(l)
+
+	// Slots at +0, +1, +2, +3 are all within MaxWait of a frozen "now".
+	for i := 0; i < 4; i++ {
+		if err := l.Wait(context.Background()); err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	// The next slot would be at +4s, beyond MaxWait.
+	if err := l.Wait(context.Background()); err != ErrOverloaded {
+		t.Fatalf("call 5: got %v, want ErrOverloaded", err)
+	}
+	st := l.Stats()
+	if st.Reserved != 4 || st.Refused != 1 {
+		t.Errorf("stats reserved=%d refused=%d, want 4 and 1", st.Reserved, st.Refused)
+	}
+	if st.NextSlotIn != 4*time.Second {
+		t.Errorf("a refused call moved the next slot to %v", st.NextSlotIn)
+	}
+}

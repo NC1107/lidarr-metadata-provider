@@ -10,11 +10,13 @@ It is the same pipeline I run, not a cut down version.
 
 Working end to end. You can build a dataset and serve from it.
 
-Not in the dataset yet: images and overviews. MusicBrainz carries neither, so they come from separate enrichment that has not been built. Artists and albums will have empty `images` and a null `overview`, which Lidarr tolerates.
+Images and overviews are not in the MusicBrainz dumps; they come from the enrichment step described below, which harvests them from Wikidata and Wikipedia. Skip it and artists and albums will have empty `images` and a null `overview`, which Lidarr tolerates.
+
+Serve a self-built dataset with `-dataset-refresh` left off (the default), otherwise the server will replace it with the published one at the first check.
 
 ## What you need
 
-- Go 1.24 or newer.
+- Go 1.26 or newer, matching `go.mod`.
 - About 10gb of free disk. The dumps are 7.4gb compressed and the pipeline streams them, so the roughly 40gb uncompressed form never lands on your disk.
 - `lbzip2` or `pbzip2`, optional but worth it. bzip2 stores independent blocks so decompression parallelises across cores, and it is the slowest part by a wide margin. Without it a full pass is around ten minutes, with it closer to two.
 

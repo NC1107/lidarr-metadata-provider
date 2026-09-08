@@ -1,5 +1,5 @@
 # Build the binary against the same Go version the module targets.
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -42,12 +42,18 @@ USER lidarr
 
 EXPOSE 5001
 
+# Every flag can be set from the environment (LMP_ADDR, LMP_DATASET_URL, ...)
+# so a compose file never has to restate the command.
 ENV LMP_DATASET=/data/dataset.db
 
 # Lidarr treats metadata failures as transient and retries, so an unhealthy
 # container that keeps answering is worse than one that reports itself down.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -q -O /dev/null --user-agent=healthcheck http://127.0.0.1:5001/ || exit 1
+# /healthz runs a real lookup against the served dataset, so "healthy" means
+# "can answer Lidarr" rather than "process exists". The start period covers a
+# slow first open; the first-boot download happens before the server listens,
+# and Docker does not fail a container for an unhealthy start period.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD wget -q -O /dev/null --user-agent=healthcheck http://127.0.0.1:5001/healthz || exit 1
 
 ENTRYPOINT ["lidarr-metadata-provider"]
 CMD ["-addr", ":5001", "-dataset", "/data/dataset.db"]

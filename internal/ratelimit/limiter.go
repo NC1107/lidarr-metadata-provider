@@ -14,14 +14,32 @@
 // spaced out instead of stampeding. Reservation makes the queue FIFO by
 // arrival, and a caller that gives up while waiting leaves its slot unused,
 // which errs toward being slower rather than faster.
+//
+// The queue is bounded. Because a slot stays reserved when its caller gives
+// up, an unbounded queue would let anyone able to reach the server push the
+// next free slot arbitrarily far into the future just by opening and
+// abandoning requests. Wait refuses with ErrOverloaded once the next slot is
+// further away than MaxWait, so the damage a burst can do is capped at
+// MaxWait of delay rather than an outage.
 package ratelimit
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// ErrOverloaded means the queue in front of MusicBrainz is already longer
+// than MaxWait, so the caller was refused rather than queued. It is a
+// transient condition: the caller should answer "try later", not fail hard.
+var ErrOverloaded = errors.New("ratelimit: too many requests queued")
+
+// DefaultMaxWait bounds how far ahead a caller may be queued. Sixty seconds
+// is around sixty queued lookups at the default interval, well past anything
+// Lidarr issues at once and short enough that a burst clears quickly.
+const DefaultMaxWait = 60 * time.Second
 
 // DefaultInterval is the spacing between requests. MusicBrainz documents 1
 // request/second; the extra 10ms absorbs clock jitter and keeps us on the
@@ -32,12 +50,16 @@ const DefaultInterval = 1010 * time.Millisecond
 // together than a fixed interval. The zero value is not usable; call New.
 type Limiter struct {
 	interval time.Duration
+	// MaxWait is the furthest into the future a caller may be queued before
+	// Wait refuses with ErrOverloaded. Zero means DefaultMaxWait.
+	MaxWait time.Duration
 
 	mu   sync.Mutex
 	next time.Time // earliest instant the next request may be issued
 
 	waiting  atomic.Int64
 	reserved atomic.Int64
+	refused  atomic.Int64
 	delayed  atomic.Int64 // cumulative nanoseconds callers spent waiting
 
 	// Injected for tests so they need not sleep in real time.
@@ -54,14 +76,24 @@ func New(interval time.Duration) *Limiter {
 	}
 	return &Limiter{
 		interval: interval,
+		MaxWait:  DefaultMaxWait,
 		now:      time.Now,
 		after:    time.After,
 	}
 }
 
+func (l *Limiter) maxWait() time.Duration {
+	if l.MaxWait > 0 {
+		return l.MaxWait
+	}
+	return DefaultMaxWait
+}
+
 // Wait blocks until the caller's reserved slot arrives, or until ctx is done.
 // On a context error the slot stays consumed, which throttles us slightly
-// more than necessary rather than risking a burst.
+// more than necessary rather than risking a burst. When the next free slot is
+// already more than MaxWait away, Wait returns ErrOverloaded at once and
+// reserves nothing.
 func (l *Limiter) Wait(ctx context.Context) error {
 	l.waiting.Add(1)
 	defer l.waiting.Add(-1)
@@ -71,6 +103,11 @@ func (l *Limiter) Wait(ctx context.Context) error {
 	at := l.next
 	if at.Before(now) {
 		at = now
+	}
+	if at.Sub(now) > l.maxWait() {
+		l.mu.Unlock()
+		l.refused.Add(1)
+		return ErrOverloaded
 	}
 	l.next = at.Add(l.interval)
 	l.mu.Unlock()
@@ -118,6 +155,7 @@ type Stats struct {
 	Interval    time.Duration `json:"interval"`
 	Waiting     int64         `json:"waiting"`      // callers queued right now
 	Reserved    int64         `json:"reserved"`     // slots handed out since start
+	Refused     int64         `json:"refused"`      // callers turned away by MaxWait
 	TotalDelay  time.Duration `json:"totalDelay"`   // time callers spent queued
 	NextSlotIn  time.Duration `json:"nextSlotIn"`   // until the next free slot
 	NextSlotStr string        `json:"nextSlotText"` // human form of NextSlotIn
@@ -137,6 +175,7 @@ func (l *Limiter) Stats() Stats {
 		Interval:    l.interval,
 		Waiting:     l.waiting.Load(),
 		Reserved:    l.reserved.Load(),
+		Refused:     l.refused.Load(),
 		TotalDelay:  time.Duration(l.delayed.Load()),
 		NextSlotIn:  in,
 		NextSlotStr: in.Round(time.Millisecond).String(),
