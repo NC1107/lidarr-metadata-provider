@@ -241,8 +241,12 @@ func (r *Reader) Album(ctx context.Context, mbid string) (*skyhook.AlbumResource
 // list, looking each one up in the dataset.
 func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResource) {
 	present := map[string]bool{}
-	for _, ar := range a.Artists {
+	for i := range a.Artists {
+		ar := &a.Artists[i]
 		present[ar.ID] = true
+		if shape, ok := r.albumArtistShape(ctx, ar.ID); ok {
+			a.Artists[i] = shape
+		}
 	}
 	// The artist a dangling track is reattributed to must itself be in the
 	// list. Prefer the primary; fall back to the first listed artist.
