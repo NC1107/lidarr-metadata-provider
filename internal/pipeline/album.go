@@ -575,10 +575,11 @@ func (c *collector) albumArtist(a *artistRow) skyhook.AlbumArtistResource {
 	if a.embedded != nil {
 		return *a.embedded
 	}
-	// The embedded shape deliberately omits images and overview even for
-	// artists that have them: the fixtures show upstream leaving them out of an
-	// album's artist list to keep album payloads small. The image and
-	// biography belong to the full artist payload only.
+	// The stored embedded shape omits images and overview even for artists
+	// that have them, as the fixtures show upstream doing, to keep album
+	// payloads small. The dataset reader fills them back in from the artist
+	// payload when it serves the album, because Lidarr's album refresh writes
+	// the embedded shape over the artist it stored (see completeAlbumArtists).
 	out := skyhook.AlbumArtistResource{
 		ID:             a.gid,
 		OldIDs:         sortedUnique(a.oldIDs),
