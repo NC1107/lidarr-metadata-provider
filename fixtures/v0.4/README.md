@@ -5,6 +5,14 @@ They are the contract: our server's responses must be semantically equal (same k
 Never regenerate them from our own server; re-capture only from the live upstream.
 The tests in `internal/skyhook` round-trip every file here through the ported Go structs.
 
+## Deliberate departure: embedded artists in album payloads
+
+The captured `GET /album/{mbid}` payloads embed each credited artist as a stub, with `overview: null` and `images: []`.
+Lidarr's album refresh writes that stub over the artist metadata it stored from `GET /artist/{mbid}`, so serving it verbatim erases a refreshed artist's biography and photo.
+This server therefore serves an embedded artist the dataset holds as that artist's own payload without `Albums`; an embedded artist the dataset lacks keeps the stub.
+The keys and types are unchanged, and everything else in the album still matches the capture.
+`TestAlbumDepartsFromCaptureOnlyInEmbeddedArtists` in `internal/dataset` pins this departure and nothing wider.
+
 ## Nasty-sample coverage
 
 | Category | Fixture |

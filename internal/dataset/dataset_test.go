@@ -16,6 +16,7 @@ import (
 func str(s string) *string { return &s }
 
 func sampleArtist() *skyhook.ArtistResource {
+	overview := "Liverpool band"
 	return &skyhook.ArtistResource{
 		ID:             "ff3e88b3-7354-4f30-967c-1a61ebc8c642",
 		OldIDs:         []string{"00000000-dead-beef-0000-000000000000"},
@@ -23,12 +24,17 @@ func sampleArtist() *skyhook.ArtistResource {
 		SortName:       "La's, The",
 		ArtistAliases:  []string{"The Las"},
 		Disambiguation: "UK band",
+		Overview:       &overview,
 		Type:           str("Group"),
 		Status:         "ended",
 		Genres:         []string{},
-		Images:         []skyhook.ImageResource{},
-		Links:          []skyhook.LinkResource{},
-		Rating:         skyhook.RatingResource{Count: 2, Value: nil},
+		Images: []skyhook.ImageResource{{
+			CoverType: "Poster",
+			URL:       "https://example.com/the-las.jpg",
+			RemoteURL: "https://example.com/the-las.jpg",
+		}},
+		Links:  []skyhook.LinkResource{},
+		Rating: skyhook.RatingResource{Count: 2, Value: nil},
 		Albums: []skyhook.ArtistAlbumResource{{
 			ID: "f57d03ff-b0a5-3b73-a14c-a5ed5f8cd956", OldIDs: []string{},
 			Title: "The La's", Type: "Album", SecondaryTypes: []string{},
@@ -84,8 +90,9 @@ func build(t *testing.T) *Reader {
 	return r
 }
 
-// The payload a build stores must be byte-for-byte the payload the server
-// serves, or the contract tests prove nothing about what users receive.
+// Artist payloads are served exactly as stored. Album payloads are completed at
+// read time so their embedded artists carry the same overview and images as the
+// full artist endpoint Lidarr refreshed earlier.
 func TestPayloadSurvivesRoundTrip(t *testing.T) {
 	r := build(t)
 
@@ -98,15 +105,30 @@ func TestPayloadSurvivesRoundTrip(t *testing.T) {
 	if string(want) != string(have) {
 		t.Errorf("artist payload changed in storage:\n stored %s\n loaded %s", want, have)
 	}
+}
 
+func TestAlbumEmbeddedArtistsAreCompletedFromArtistPayload(t *testing.T) {
+	r := build(t)
 	album, err := r.Album(context.Background(), "f57d03ff-b0a5-3b73-a14c-a5ed5f8cd956")
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantAlbum, _ := json.Marshal(sampleAlbum())
-	haveAlbum, _ := json.Marshal(album)
-	if string(wantAlbum) != string(haveAlbum) {
-		t.Errorf("album payload changed in storage:\n stored %s\n loaded %s", wantAlbum, haveAlbum)
+	if len(album.Artists) != 1 {
+		t.Fatalf("album has %d embedded artists, want 1", len(album.Artists))
+	}
+	got := album.Artists[0]
+	want := sampleArtist()
+	if got.ArtistName != want.ArtistName || got.SortName != want.SortName || got.Disambiguation != want.Disambiguation {
+		t.Fatalf("embedded artist shape = %+v", got)
+	}
+	if got.Type == nil || *got.Type != *want.Type {
+		t.Fatalf("embedded artist type = %v, want %v", got.Type, want.Type)
+	}
+	if (got.Overview == nil) != (want.Overview == nil) || (got.Overview != nil && *got.Overview != *want.Overview) {
+		t.Fatalf("embedded artist overview = %v, want %v", got.Overview, want.Overview)
+	}
+	if len(got.Images) != len(want.Images) {
+		t.Fatalf("embedded artist images = %d, want %d", len(got.Images), len(want.Images))
 	}
 }
 
