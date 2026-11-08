@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sync/singleflight"
 	_ "modernc.org/sqlite"
 
 	"github.com/nc1107/lidarr-metadata-provider/internal/skyhook"
@@ -25,6 +27,9 @@ type Reader struct {
 	path    string
 	info    Info
 	decoder *zstd.Decoder
+
+	streamOpts []zstd.DOption
+	shapes     singleflight.Group
 }
 
 // Info is the dataset's provenance and contents, for the status view.
@@ -277,20 +282,74 @@ func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResou
 // albumArtistShape returns the embedded artist shape for an MBID, or false if
 // the dataset does not have that artist.
 func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.AlbumArtistResource, bool) {
-	full, err := r.Artist(ctx, mbid)
+	// Concurrent albums credited to one artist share a single read, so a burst
+	// of compilations holds one copy of the Various Artists blob rather than
+	// one per request.
+	got, err, _ := r.shapes.Do(mbid, func() (any, error) {
+		blob, err := r.resolve(context.WithoutCancel(ctx), "artist", "artist_alias_mbid", mbid)
+		if err != nil {
+			return skyhook.AlbumArtistResource{}, err
+		}
+		return r.decodeAlbumArtist(blob)
+	})
 	if err != nil {
 		return skyhook.AlbumArtistResource{}, false
 	}
-	return skyhook.AlbumArtistResource{
-		ID: full.ID, OldIDs: full.OldIDs, ArtistName: full.ArtistName,
-		SortName: full.SortName, ArtistAliases: full.ArtistAliases,
-		Disambiguation: full.Disambiguation, Overview: full.Overview,
-		Type: full.Type, Status: full.Status, Genres: full.Genres,
-		Images: full.Images, Links: full.Links, Rating: full.Rating,
-	}, true
+	return got.(skyhook.AlbumArtistResource), true
+}
+
+// decodeAlbumArtist streams an artist payload and stops at its album list,
+// which is the last key and the only large one. Various Artists alone
+// decompresses to hundreds of megabytes of albums that an embedded artist has
+// no use for, and it is embedded in every compilation.
+func (r *Reader) decodeAlbumArtist(blob []byte) (skyhook.AlbumArtistResource, error) {
+	var out skyhook.AlbumArtistResource
+	zr, err := zstd.NewReader(bytes.NewReader(blob), r.streamOpts...)
+	if err != nil {
+		return out, err
+	}
+	defer zr.Close()
+
+	targets := map[string]any{
+		"id": &out.ID, "oldids": &out.OldIDs, "artistname": &out.ArtistName,
+		"sortname": &out.SortName, "artistaliases": &out.ArtistAliases,
+		"disambiguation": &out.Disambiguation, "overview": &out.Overview,
+		"type": &out.Type, "status": &out.Status, "genres": &out.Genres,
+		"images": &out.Images, "links": &out.Links, "rating": &out.Rating,
+	}
+	dec := json.NewDecoder(zr)
+	if _, err := dec.Token(); err != nil {
+		return out, err
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return out, err
+		}
+		key, _ := tok.(string)
+		if key == "Albums" {
+			return out, nil
+		}
+		target, known := targets[key]
+		if !known {
+			target = new(json.RawMessage)
+		}
+		if err := dec.Decode(target); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 func (r *Reader) lookup(ctx context.Context, table, aliases, mbid string, into any) error {
+	blob, err := r.resolve(ctx, table, aliases, mbid)
+	if err != nil {
+		return err
+	}
+	return r.decode(blob, into)
+}
+
+func (r *Reader) resolve(ctx context.Context, table, aliases, mbid string) ([]byte, error) {
 	mbid = strings.ToLower(strings.TrimSpace(mbid))
 
 	blob, err := r.payload(ctx, table, mbid)
@@ -302,22 +361,22 @@ func (r *Reader) lookup(ctx context.Context, table, aliases, mbid string, into a
 			`SELECT mbid FROM `+aliases+` WHERE old_mbid = ?`, mbid)
 		if err := row.Scan(&current); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return source.ErrNotFound
+				return nil, source.ErrNotFound
 			}
 			// Anything else is the database failing, not the id being unknown.
 			// Reporting it as not found would tell Lidarr the artist is gone.
-			return err
+			return nil, err
 		}
 		if blob, err = r.payload(ctx, table, current); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return source.ErrNotFound
+				return nil, source.ErrNotFound
 			}
-			return err
+			return nil, err
 		}
 	} else if err != nil {
-		return err
+		return nil, err
 	}
-	return r.decode(blob, into)
+	return blob, nil
 }
 
 func (r *Reader) payload(ctx context.Context, table, mbid string) ([]byte, error) {
@@ -499,8 +558,10 @@ func (r *Reader) loadDecoder() error {
 		}
 	}
 	opts := []zstd.DOption{zstd.WithDecoderConcurrency(0)}
+	r.streamOpts = []zstd.DOption{zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true)}
 	if len(dict) > 0 {
 		opts = append(opts, zstd.WithDecoderDicts(dict))
+		r.streamOpts = append(r.streamOpts, zstd.WithDecoderDicts(dict))
 	}
 	dec, err := zstd.NewReader(nil, opts...)
 	if err != nil {
