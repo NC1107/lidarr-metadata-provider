@@ -238,18 +238,27 @@ func (r *Reader) Album(ctx context.Context, mbid string) (*skyhook.AlbumResource
 	if err := r.lookup(ctx, "album", "album_alias_mbid", mbid, &out); err != nil {
 		return nil, err
 	}
-	r.completeAlbumArtists(ctx, &out)
+	if err := r.completeAlbumArtists(ctx, &out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
 // completeAlbumArtists adds any track artist missing from the album's Artists
 // list, looking each one up in the dataset.
-func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResource) {
+func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResource) error {
 	present := map[string]bool{}
 	for i := range a.Artists {
 		ar := &a.Artists[i]
 		present[ar.ID] = true
-		if shape, ok := r.albumArtistShape(ctx, ar.ID); ok {
+		shape, found, err := r.albumArtistShape(ctx, ar.ID)
+		if err != nil {
+			return err
+		}
+		if found {
+			// The album's ArtistID and its track credits name the stored id, and
+			// Lidarr discards the album if that id leaves this list.
+			shape.ID = ar.ID
 			a.Artists[i] = shape
 		}
 	}
@@ -265,7 +274,11 @@ func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResou
 			if t.ArtistID == "" || present[t.ArtistID] {
 				continue
 			}
-			if shape, ok := r.albumArtistShape(ctx, t.ArtistID); ok {
+			shape, found, err := r.albumArtistShape(ctx, t.ArtistID)
+			if err != nil {
+				return err
+			}
+			if found {
 				present[t.ArtistID] = true
 				a.Artists = append(a.Artists, shape)
 				continue
@@ -277,11 +290,14 @@ func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResou
 			t.ArtistID = fallback
 		}
 	}
+	return nil
 }
 
 // albumArtistShape returns the embedded artist shape for an MBID, or false if
-// the dataset does not have that artist.
-func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.AlbumArtistResource, bool) {
+// the dataset does not have that artist. A failed read is an error rather than
+// a miss: serving the stored stub instead would have Lidarr write it over the
+// artist's biography and photo, while a failed request is simply retried.
+func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.AlbumArtistResource, bool, error) {
 	// Concurrent albums credited to one artist share a single read, so a burst
 	// of compilations holds one copy of the Various Artists blob rather than
 	// one per request.
@@ -292,10 +308,13 @@ func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.Alb
 		}
 		return r.decodeAlbumArtist(blob)
 	})
-	if err != nil {
-		return skyhook.AlbumArtistResource{}, false
+	if errors.Is(err, source.ErrNotFound) {
+		return skyhook.AlbumArtistResource{}, false, nil
 	}
-	return got.(skyhook.AlbumArtistResource), true
+	if err != nil {
+		return skyhook.AlbumArtistResource{}, false, err
+	}
+	return got.(skyhook.AlbumArtistResource), true, nil
 }
 
 // decodeAlbumArtist streams an artist payload and stops at its album list,
