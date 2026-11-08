@@ -178,6 +178,26 @@ func TestEmbeddedArtistKeepsTheIDTheAlbumCredits(t *testing.T) {
 	}
 }
 
+func TestTrackCreditToARetiredIDStaysInTheArtistList(t *testing.T) {
+	const retired = "00000000-dead-beef-0000-000000000000"
+	album := sampleAlbum()
+	album.Releases[0].Tracks[0].ArtistID = retired
+
+	got, err := openDataset(t, writeDataset(t, album)).Album(context.Background(), album.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tid := got.Releases[0].Tracks[0].ArtistID; tid != retired {
+		t.Fatalf("track artist = %q, want %q", tid, retired)
+	}
+	for _, a := range got.Artists {
+		if a.ID == retired {
+			return
+		}
+	}
+	t.Errorf("no embedded artist carries the credited id: %+v", got.Artists)
+}
+
 // Serving the stub after a failed read would erase the artist's biography in
 // Lidarr, whereas a failed request is retried.
 func TestAlbumFailsWhenAnEmbeddedArtistCannotBeRead(t *testing.T) {

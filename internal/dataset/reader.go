@@ -256,9 +256,6 @@ func (r *Reader) completeAlbumArtists(ctx context.Context, a *skyhook.AlbumResou
 			return err
 		}
 		if found {
-			// The album's ArtistID and its track credits name the stored id, and
-			// Lidarr discards the album if that id leaves this list.
-			shape.ID = ar.ID
 			a.Artists[i] = shape
 		}
 	}
@@ -314,7 +311,11 @@ func (r *Reader) albumArtistShape(ctx context.Context, mbid string) (skyhook.Alb
 	if err != nil {
 		return skyhook.AlbumArtistResource{}, false, err
 	}
-	return got.(skyhook.AlbumArtistResource), true, nil
+	shape := got.(skyhook.AlbumArtistResource)
+	// The album's ArtistID and track credits name the id they were stored with,
+	// even a retired one, and Lidarr discards the album if that id is not listed.
+	shape.ID = mbid
+	return shape, true, nil
 }
 
 // decodeAlbumArtist streams an artist payload and stops at its album list,
