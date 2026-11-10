@@ -50,13 +50,13 @@ That gap is exactly why the prebuilt datasets exist.
 
 The musicbrainz dumps are about 7gb and slow to process, so that happens ahead of time and what ships is the compact dataset it produces, you never touch the dumps. The server is a single go binary with sqlite opened read only, responses are precomputed json keyed by mbid, and search runs on FTS5.
 
-New datasets are built on github actions twice a week, right after musicbrainz publishes. By default your container keeps the one it first downloaded, a stable snapshot that never changes under you. If you want it to stay current, set a refresh interval (`-dataset-refresh`, see Flags) and it checks for a newer dataset on that schedule, verifies it, and swaps it in without dropping a request, leaving you on the version that already worked if a download goes bad. There's no hosted instance and no phone home, on purpose, so if lidarr, musicbrainz and github all went down your container keeps serving what it has.
+New datasets are built on github actions pretty much an hour after musicbrainz publishes a dump, it checks daily so off schedule dumps get picked up too. By default your container keeps the one it first downloaded, a stable snapshot that never changes under you. If you want it to stay current, set a refresh interval (`-dataset-refresh`, see Flags) and it checks for a newer dataset on that schedule, verifies it, and swaps it in without dropping a request, leaving you on the version that already worked if a download goes bad. There's no hosted instance and no phone home, on purpose, so if lidarr, musicbrainz and github all went down your container keeps serving what it has.
 
 You can build the dataset yourself if you'd rather not use my images, the pipeline is the same code I run, see [docs/BUILDING.md](docs/BUILDING.md).
 
 ## The gap between dumps
 
-Dumps come out twice a week, so there's a window where a new album is in musicbrainz but not your dataset yet. Two ways to cover it, and you can use both: keep the dataset current with `-dataset-refresh` (see Flags), or turn on the live fallback (uncomment the `command` block in `compose.yaml`, set a contact) so anything the dataset misses gets looked up from musicbrainz directly:
+Dumps come out about once or twice a week, so there's a window where a new album is in musicbrainz but not your dataset yet. Two ways to cover it, and you can use both: keep the dataset current with `-dataset-refresh` (see Flags), or turn on the live fallback (uncomment the `command` block in `compose.yaml`, set a contact) so anything the dataset misses gets looked up from musicbrainz directly:
 
 ```
 -fallback -contact you@example.com

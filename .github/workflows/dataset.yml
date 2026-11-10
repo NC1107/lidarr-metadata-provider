@@ -2,19 +2,23 @@
 #
 # This workflow is the answer to "does depending on this project make its
 # maintainer a bottleneck". Nobody produces these by hand: MusicBrainz
-# publishes a full export twice a week, this runs after each one, and the
+# publishes a full export most weeks, this runs after each one, and the
 # result is attached to a release with its checksum.
 name: dataset
 
 on:
-  # MusicBrainz exports land Wednesday and Saturday around 00:20 UTC. Running
-  # well after gives the mirror time to finish publishing, and the offset keeps
-  # this off the top of the hour, when every other scheduled job on the planet
-  # fires. The schedule only polls; the expensive build runs only when the
-  # check job finds an export newer than the latest release (see below), so a
-  # run on an unchanged export costs seconds, not an hour.
+  # A MusicBrainz export starts around 00:20 UTC and LATEST only moves to it
+  # once the export finishes, which on 2026-11-04 was 05:12 UTC. Polling an
+  # hour after that leaves room for a slow export, and the offset keeps this
+  # off the top of the hour, when every other scheduled job on the planet
+  # fires. It polls daily rather than on the nominal Wednesday and Saturday
+  # because exports also land off that schedule (Sunday 2026-10-11 and
+  # 2026-11-01) while Saturday ones have mostly stopped. The schedule only
+  # polls; the expensive build runs only when the check job finds an export
+  # newer than the latest release (see below), so a day with nothing new costs
+  # seconds, not an hour.
   schedule:
-    - cron: "37 6 * * 3,6"
+    - cron: "13 6 * * *"
   workflow_dispatch:
     inputs:
       export:
